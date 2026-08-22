@@ -6,7 +6,7 @@ is slow and drops sessions if hammered.
 
   uv run --no-project --with flask --with pysolarmanv5 python settings_dash.py
 
-Binds to localhost only - this writes holding registers, unlike dashboard.py.
+Binds to localhost only - this writes holding registers.
 Charge side only: discharge windows are all unset and 43142 does not cap house
 supply, so the dashboard neither reads nor writes them. control.py remains the
 way in if that ever changes. control.PROTECTED (G98/G99 grid protection) is
@@ -42,7 +42,6 @@ REG_GRID_VOLTAGE = 33073
 # Daily yield counters. 33036 read 31.7 kWh for 2026-08-20, matching the 32 kWh
 # the owner recorded that day, which is what confirms the scaling and the pair.
 REG_ENERGY_TODAY = 33035      # x0.1 kWh, resets at midnight
-REG_ENERGY_YESTERDAY = 33036  # x0.1 kWh
 
 # Daily grid and house counters, one 33171..33180 block. Identified by closing
 # yesterday's energy balance:
@@ -91,7 +90,7 @@ def _session():
 
 
 def _drop_session():
-    """Forget the session so the next read reconnects (voltage.py's strategy)."""
+    """Forget the session so the next read reconnects."""
     global _modbus
     _modbus = None
 

@@ -5,7 +5,7 @@ discharge into the car overnight (see CLAUDE.md). Octopus controls the car's
 charging and can schedule a "dispatch" OUTSIDE that window - a daytime
 bump-charge - and nothing in this repo currently sees one coming. So this module
 answers two questions and no others: is the car charging now, and when is the
-next planned slot. daytime_dispatch() is the flag it exists for.
+next planned slot.
 
   uv run --no-project python octopus.py show
   uv run --no-project python octopus.py devices     # find the device id once
@@ -19,7 +19,7 @@ Read-only: the only mutation ever issued is obtainKrakenToken, which is how the
 API key is exchanged for a JWT. Nothing here touches the inverter.
 
 Nothing raises into a caller. Every failure comes back as {"ok": False, "error":
-"..."} in the same null-and-retry spirit as voltage.py, because settings_dash.py
+"..."} in the same null-and-retry spirit as the poller, because settings_dash.py
 imports this and must not be taken down by Octopus being unreachable.
 """
 import base64
@@ -70,13 +70,13 @@ AUTH_CODE = "KT-CT-1111"
 
 AUTH_QUERY = """
 mutation ObtainToken($key: String!) {
-  obtainKrakenToken(input: { APIKey: $key }) { token refreshToken refreshExpiresIn }
+  obtainKrakenToken(input: { APIKey: $key }) { token refreshToken }
 }
 """
 
 REFRESH_QUERY = """
 mutation Refresh($rt: String!) {
-  obtainKrakenToken(input: { refreshToken: $rt }) { token refreshToken refreshExpiresIn }
+  obtainKrakenToken(input: { refreshToken: $rt }) { token refreshToken }
 }
 """
 
@@ -94,7 +94,7 @@ POLL_QUERY = """
 query Dispatches($account: String!, $device: String!) {
   devices(accountNumber: $account, deviceId: $device) { status { currentState } }
   flexPlannedDispatches(deviceId: $device) { start end type energyAddedKwh }
-  completedDispatches(accountNumber: $account) { start end delta meta { source location } }
+  completedDispatches(accountNumber: $account) { start end delta }
 }
 """
 
@@ -221,7 +221,6 @@ def _graphql(query, variables, token=None, tolerate=()):
         if data is None:
             raise OctopusError(message or "Octopus returned no data")
         return data
-    raise OctopusError("Octopus rejected the token in both header formats", AUTH_CODE)
 
 
 def _rate_limited():
@@ -367,8 +366,6 @@ def _outside_window(start, end):
     and asking each instant what the local clock says sidesteps both. Slots are
     hours, not days, so the cost is trivial.
     """
-    if start is None:
-        return False
     if end is None or end <= start:
         return not _in_window(start)
     moment, step, guard = start, timedelta(minutes=1), 0
@@ -386,15 +383,11 @@ def _dispatch(entry):
     start, end = _local(entry.get("start")), _local(entry.get("end"))
     if start is None:
         return None
-    meta = entry.get("meta") or {}
     return {
         "start": start,
         "end": end,
         "kwh": _number(entry.get("energyAddedKwh")) or _number(entry.get("delta")),
         "type": entry.get("type"),
-        # meta.source is frequently null; when present it has read "smart-charge"
-        # or "bump-charge". Never assume it is populated.
-        "source": meta.get("source"),
         "outside_window": _outside_window(start, end),
     }
 
@@ -414,15 +407,15 @@ def _brackets(dispatch, now):
                  or now.timestamp() < dispatch["end"].timestamp()))
 
 
-def _build_state(payload, now=None):
+def _build_state(payload):
     """Turn one poll's GraphQL data into the dict state() hands out.
 
     Pure: no network, no globals. All the traps live in here, so this is the
     part worth testing against synthetic payloads.
     """
-    now = now or datetime.now(TZ)
+    now = datetime.now(TZ)
     device = (payload.get("devices") or [{}])
-    status = (device[0] if device else {}).get("status") or {}
+    status = device[0].get("status") or {}
     current_state = status.get("currentState")
 
     planned = _dispatches(payload.get("flexPlannedDispatches"))
@@ -454,7 +447,6 @@ def _build_state(payload, now=None):
         "charging_now": charging,
         "current_state": current_state,
         "current": current,
-        "next": following,
         "next_start": following["start"] if following else None,
         "next_end": following["end"] if following else None,
         "next_kwh": following["kwh"] if following else None,
@@ -475,7 +467,6 @@ def _failed(message):
         "charging_now": False,
         "current_state": None,
         "current": None,
-        "next": None,
         "next_start": None,
         "next_end": None,
         "next_kwh": None,
@@ -493,15 +484,14 @@ query Tariff($account: String!) {
     electricityAgreements(active: true) {
       meterPoint { direction }
       tariff {
-        __typename
-        ... on StandardTariff { displayName fullName unitRate standingCharge }
+        ... on StandardTariff { unitRate standingCharge }
         ... on HalfHourlyTariff {
-          displayName fullName standingCharge
+          standingCharge
           unitRates { value }
         }
-        ... on DayNightTariff { displayName fullName dayRate nightRate standingCharge }
+        ... on DayNightTariff { dayRate nightRate standingCharge }
         ... on ThreeRateTariff {
-          displayName fullName dayRate nightRate offPeakRate standingCharge
+          dayRate nightRate offPeakRate standingCharge
         }
       }
     }
@@ -534,7 +524,6 @@ def _parse_tariff(data):
                   if isinstance(r, dict)]
         rates = sorted(r for r in rates if r is not None)
         entry = {
-            "name": tariff.get("displayName") or tariff.get("fullName"),
             "standing": _number(tariff.get("standingCharge")),
             # Cheapest and dearest published rate; a single-rate tariff puts
             # the same number in both.
@@ -656,20 +645,6 @@ def state():
         return _cache
 
 
-def charging_now():
-    return bool(state()["charging_now"])
-
-
-def next_dispatch():
-    """The next planned slot as a dispatch dict, or None."""
-    return state()["next"]
-
-
-def daytime_dispatch():
-    """True if any planned or active slot reaches outside 23:30-05:30 local."""
-    return bool(state()["daytime_dispatch"])
-
-
 def _day_prefix(moment, now):
     """"", "tomorrow " or a weekday, so a time alone is never ambiguous."""
     days = (moment.date() - now.date()).days
@@ -680,18 +655,17 @@ def _day_prefix(moment, now):
     return moment.strftime("%a ")
 
 
-def describe(current=None, now=None):
+def describe(current=None):
     """One short sentence for the dashboard. States facts, recommends nothing.
 
     A dispatch is a plan and not a promise: slots are cancelled at the last
     minute and a dispatch does not guarantee the car draws anything. The wording
-    says "planned" for that reason. `now` is a parameter only so the wording can
-    be tested against a fixed clock.
+    says "planned" for that reason.
     """
     current = current or state()
     if not current["ok"]:
         return "car charge status unavailable"
-    now = now or datetime.now(TZ)
+    now = datetime.now(TZ)
     if current["charging_now"]:
         active = current.get("current")
         if active and active["end"]:

@@ -2,6 +2,4 @@
 __pycache__/
 *.pyc
 .solar_cache.json
-solis_voltage_log.db
-templates/
 .claude/settings.local.json

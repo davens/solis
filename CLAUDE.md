@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Monitoring and control for a **Solis 6 kW hybrid inverter** (model `0x3105`) reached over Modbus through a **Solarman/IGEN WiFi data logger**. Four standalone scripts, no package structure, no git, no dependency manifest. Grid voltage is logged to SQLite and charted by a Flask app.
+Monitoring and control for a **Solis 6 kW hybrid inverter** (model `0x3105`) reached over Modbus through a **Solarman/IGEN WiFi data logger**. Standalone scripts, no package structure, no dependency manifest. The grid-voltage logger and its Flask chart (`voltage.py`, `dashboard.py`, `solis_voltage_log.db`) were retired and deleted on 2026-08-22 - see Context.
 
 Hardware: **three Fox LV5200 modules in parallel** - ~300 Ah at 51.2 V, **~15.4 kWh** - 5 kW delivery, 90% SOH. (This file said 5.1 kWh until 2026-08-21; that is *one* module, and it made every fill-time estimate three times too short.) Logger serial `0000000000`, MAC `000000000000`, Modbus on port 8899. **Do not hard-code its IP** — see `solis_net.py`.
 
@@ -14,8 +14,6 @@ No `pyproject.toml` or `requirements.txt`, and the system Python has none of the
 
 ```bash
 uv run --no-project python scan.py                                   # find logger (stdlib only)
-uv run --no-project --with pysolarmanv5 python voltage.py            # collector, runs forever
-uv run --no-project --with flask --with pandas python dashboard.py   # dashboard on :5050
 uv run --no-project --with pysolarmanv5 python control.py show
 uv run --no-project --with pysolarmanv5 python control.py charge-current 50 --apply
 uv run --no-project --with flask --with pysolarmanv5 python settings_dash.py   # control UI on :5051
@@ -24,15 +22,15 @@ uv run --no-project python solar_forecast.py record 2026-08-20 32     # log an a
 uv run --no-project python solar_forecast.py calibrate                # refit against actuals
 ```
 
-No tests, no linter, no build step. Inspect the log with `sqlite3 solis_voltage_log.db`.
+No tests, no linter, no build step.
 
 ## Architecture
 
-**Read path.** `voltage.py` opens a Solarman V5 session, polls input register 33073 every 5 s, appends to `voltage_readings`. On any exception it sets `modbus = None` so the next iteration reconnects — that null-and-retry is the entire error strategy. Each write opens its own SQLite connection.
+**Read path.** `settings_dash.py` owns it: a daemon thread holds one Solarman V5 session, sweeps telemetry and settings every 10 s, and serves the cache through `/api/state`. On any exception `_drop_session()` sets the session to `None` so the next sweep reconnects — that null-and-retry is the entire error strategy, inherited from the retired logger.
 
 **Control path.** `control.py` writes holding registers over the same session: dry-run unless `--apply`, validates ranges, reads back every write, hard-refuses `PROTECTED`. It replaced an MQTT/Node-RED indirection (`mqtt_pub.py`, `mqtt_2.py`, deleted 2026-08-21) that published `struct.pack('<H', v)` to `nodered/solis/*` via a broker now requiring credentials nobody has. Direct Modbus needs no broker — **do not reintroduce that hop.**
 
-**Address resolution.** `solis_net.py` is the single place that knows how to reach the logger: `$SOLIS_HOST` override → UDP broadcast discovery by serial → `LAST_KNOWN` fallback. `control.py` and `voltage.py` both go through it, so a DHCP move needs no code change. `scan.py` is the standalone version of the same broadcast (`WIFIKIT-214028-READ` to port 48899, reply `ipaddress,mac,serial`).
+**Address resolution.** `solis_net.py` is the single place that knows how to reach the logger: `$SOLIS_HOST` override → UDP broadcast discovery by serial → `LAST_KNOWN` fallback. `control.py` and `settings_dash.py` both go through it, so a DHCP move needs no code change. `scan.py` is the standalone version of the same broadcast (`WIFIKIT-214028-READ` to port 48899, reply `ipaddress,mac,serial`).
 
 Discovery is layer-2 only — it works when the client shares a segment with the logger, and silently falls back otherwise. Across a routed boundary, set `SOLIS_HOST`.
 
@@ -190,16 +188,7 @@ capped the row at 620px to close the label-to-input gap; that just left half the
 slider is what legitimately fills that width. `/api/write` re-imports `control.py`'s constants and guards
 rather than restating them, adds its own refusal for *any* discharge-window write, and re-reads after
 every write. Bound to `127.0.0.1` deliberately — it writes holding registers. HTML lives in the
-`PAGE` constant and is served with `render_template_string`, sidestepping the `templates/` trap below.
-
-**Voltage dashboard.** `dashboard.py` serves `/` (chart), `/data` (last 24 h as a Chart.js dataset + min/max/avg), `/stats` (all-time). Browser polls `/data` every 5 s.
-
-```sql
-voltage_readings(id INTEGER PK, timestamp TEXT NOT NULL, voltage_phase_a REAL NOT NULL, raw_value INTEGER)
--- timestamp is local-time ISO from datetime.now().isoformat(); index idx_timestamp
-```
-
-`raw_value` is the unscaled word, so a wrong `VOLTAGE_SCALING` is retroactively fixable.
+`PAGE` constant and is served with `render_template_string`, so there is no template directory to edit.
 
 ## Register map (verified live 2026-08-21)
 
@@ -287,14 +276,12 @@ which is what pins the x0.1 scaling.
   whole session unnoticed. Powers come from the u32 pairs (33057/33058, 33149/33150), not from
   multiplying volts by amps.
 - **Don't confuse `43012`/`43013` (what the battery can do) with `43141`/`43142` (what is applied).**
-- **`dashboard.py` overwrites `templates/index.html` at import time** from a module-level heredoc. Edits to the template file are silently discarded — change the string in `dashboard.py`.
 - **Network topology is mid-change (2026-08-21).** A FRITZ!Box serves `198.51.100.0/24`. Two Tenda Nova meshes hang off it, split by band — a fast main mesh, and a 2.4 GHz IoT mesh carrying the inverter. The IoT mesh *was* NATing `192.0.2.0/24` (gateway `192.0.2.1`, WAN side `198.51.100.49`), which made the inverter unreachable from the main mesh: `5.x` could reach `178.x` outbound, never the reverse. The owner is switching that mesh to **bridge mode**, after which everything is flat on `178.x` and the logger takes a new Fritz-issued address. Let `solis_net.py` find it; don't assume any address.
 - **Reaching the logger from the main mesh goes through a port forward**, added in the Tenda app 2026-08-21: `198.51.100.49:8899 → 192.0.2.45:8899` TCP. Verified carrying Modbus. Bridge mode was tried first and the Nova silently rolled back to Dynamic (twice), despite a valid wired uplink — don't burn time retrying it.
 - **The forward is LAN-only, not internet-facing.** Mesh B's WAN is the Fritz LAN. The FRITZ!Box 7530 AX (public IP as of 2026-08-21: `<wan-ip>`) has **zero** port mappings, so two NATs sit between the inverter and the internet.
 - **The forward has no DHCP reservation behind it.** The Tenda app wouldn't accept a MAC binding, so if the logger's lease moves off `192.0.2.45` the forward breaks silently — the symptom is `control.py` failing only from the main mesh while working from the IoT mesh. Fix by re-pointing the forward, or set a static IP on the logger itself.
 - **UPnP `AddPortMapping` does not work on this Tenda** (SOAP 500), almost certainly because it refuses mappings aimed at a device other than the requester. Reading mappings works; the app's own forwards do not show up in the UPnP list. Use the app.
 - **Discovery is intermittent.** The logger often ignores the `WIFIKIT` broadcast, especially with a Modbus session open. `solis_net.resolve_host()` falls through to its `CANDIDATES` list for this reason — don't "fix" discovery by removing the fallback.
-- `dashboard.py` runs `debug=True` bound to `0.0.0.0`.
 - **`settings_dash.py` needs `OCTOPUS_API_KEY` and `OCTOPUS_ACCOUNT` in its environment** — they
   are exported from `~/.zshrc`, which a non-interactive shell does not source. Restarted without
   them, the dashboard hides the £ line and the car row *silently* (that gating is by design: no key
@@ -343,8 +330,8 @@ which is what pins the x0.1 scaling.
 
 ## Context
 
-**Voltage logging is finished business — do not restart it or suggest doing so.** `voltage.py` and `solis_voltage_log.db` were built during a past period of grid instability to evidence a DNO complaint. The issue was fixed between 2025-03-30 and 2025-08-13 and the grid is behaving. Don't propose launchd jobs, backfills, or gap analysis.
+**Voltage logging is finished business — do not rebuild it or suggest doing so.** `voltage.py`, `dashboard.py` and `solis_voltage_log.db` were built during a past period of grid instability to evidence a DNO complaint. The issue was fixed between 2025-03-30 and 2025-08-13 and the grid is behaving. All three were deleted from the repo on 2026-08-22 (they remain in git history before that commit); the database was moved to `~/solis_voltage_log_archive.db` as evidence. Don't propose launchd jobs, backfills, or gap analysis.
 
-**The DB is 4 days, not 5 months.** Despite spanning 2025-03-29 → 2025-08-14, it holds only 2025-03-29/30 and 2025-08-13/14. Any hour-of-day aggregate over the whole table pools the broken period with the fixed one and is misleading — always split by date first. Like-for-like, mornings went from mean 252.4 V at 09:00 / 255.8 V at 10:00 (peak 262.4 V, climbing steeply — the PV-driven rise) in March, to a flat ~244 V through the same hours in August. That flatness is the evidence the fix took.
+**The archived DB is a few days, not 17 months.** Despite spanning 2025-03-29 → 2026-08-21, it holds only 2025-03-29/30, 2025-08-13/14 and a handful of 2026-08-21 rows. Any hour-of-day aggregate over the whole table pools the broken period with the fixed one and is misleading — always split by date first. Like-for-like, mornings went from mean 252.4 V at 09:00 / 255.8 V at 10:00 (peak 262.4 V, climbing steeply — the PV-driven rise) in March, to a flat ~244 V through the same hours in August. That flatness is the evidence the fix took.
 
 Active interest is now `control.py` — battery and tariff settings — not monitoring.
