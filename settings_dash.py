@@ -780,7 +780,7 @@ PAGE = """<!doctype html>
      The `·` also stops doing two jobs at once - it now only ever separates
      values inside one measurement, never whole clauses. */
   .mrow { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
-  .mrow .k { color: var(--dim); }
+  .mrow .k { color: var(--dim); white-space: nowrap; }
   .mrow .v { color: var(--text); font-family: var(--mono); white-space: nowrap; }
   .mrow .v.acc { color: var(--ac, var(--text)); }
   /* Car tile: the plug state rides the top-right corner, the same slot the
@@ -793,7 +793,7 @@ PAGE = """<!doctype html>
   .plugsub .sdot { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); }
   .plugsub.on { color: var(--text); }
   .plugsub.on .sdot { background: var(--green); animation: pulse 2.4s infinite; }
-  .plugsub.ready { color: var(--text); }
+  .plugsub.ready { color: var(--dim); }  /* the dot says plugged in; the word need not shout */
   .plugsub.ready .sdot { background: var(--blue); }
   .plugsub.bad { color: var(--red); }
   .plugsub.bad .sdot { background: var(--red); }
@@ -977,10 +977,12 @@ PAGE = """<!doctype html>
     background: linear-gradient(180deg, rgba(195,245,60,.5), rgba(195,245,60,.14));
     border-left: 1px solid var(--lime); border-right: 1px solid var(--lime);
   }
+  /* Car dispatches are blue to match the Car tile; amber read as a variant of
+     the charge window. */
   .span.car {
     top: 60%; bottom: 0;
-    background: repeating-linear-gradient(45deg, rgba(255,178,36,.5) 0 4px, rgba(255,178,36,.14) 4px 8px);
-    border-left: 1px solid var(--amber); border-right: 1px solid var(--amber);
+    background: repeating-linear-gradient(45deg, rgba(77,163,255,.55) 0 4px, rgba(77,163,255,.16) 4px 8px);
+    border-left: 1px solid var(--blue); border-right: 1px solid var(--blue);
   }
   .now { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--amber); box-shadow: 0 0 10px var(--amber); }
   .ticks { display: flex; justify-content: space-between; color: var(--dim); font-size: 10px;
@@ -991,8 +993,8 @@ PAGE = """<!doctype html>
                   border-left: 1px solid var(--lime); border-right: 1px solid var(--lime); }
   .legend i.cur { width: 2px; background: var(--amber); box-shadow: 0 0 8px var(--amber); }
   .legend i.car { height: 5px;
-    background: repeating-linear-gradient(45deg, rgba(255,178,36,.5) 0 4px, rgba(255,178,36,.14) 4px 8px);
-    border-left: 1px solid var(--amber); border-right: 1px solid var(--amber); }
+    background: repeating-linear-gradient(45deg, rgba(77,163,255,.55) 0 4px, rgba(77,163,255,.16) 4px 8px);
+    border-left: 1px solid var(--blue); border-right: 1px solid var(--blue); }
   input[type=range] {
     -webkit-appearance: none; appearance: none; background: transparent;
     flex: 2 1 230px; min-width: 160px; height: 38px; padding: 0; margin: 0;
@@ -1372,6 +1374,10 @@ function gridMoney(cost) {
     + (hasExp ? '<span class="o">&pound;' + cost.export_gbp.toFixed(2) + ' ↑</span>' : '');
 }
 
+const mrow = (k, v, acc) =>
+  '<div class="mrow"><span class="k">' + k + '</span><span class="v'
+  + (acc ? ' acc' : '') + '">' + v + '</span></div>';
+
 function render(s) {
   // Polls overlap, so responses can arrive out of order. Never let an older
   // sweep overwrite a newer one - after a write that would silently roll the
@@ -1430,10 +1436,6 @@ function render(s) {
   // Daylight bounds for *today*, so a low reading after dark reads as nightfall
   // rather than a fault. Falls back to treating it as daytime.
   // One row of sub-detail: dim label, mono figure, hard against opposite edges.
-  const mrow = (k, v, acc) =>
-    '<div class="mrow"><span class="k">' + k + '</span><span class="v'
-    + (acc ? ' acc' : '') + '">' + v + '</span></div>';
-
   const clockNow = String(now.getHours()).padStart(2, '0') + ':'
                  + String(now.getMinutes()).padStart(2, '0');
   const sun = (s.forecast && s.forecast.weather && s.forecast.weather.today) || null;
@@ -1752,29 +1754,37 @@ function renderCar(car, t) {
     if (!car.charging && car.plug !== 'plugged in') {
       card.classList.add('night');  // unplugged / no link / unknown: dim like Solar after sunset
     }
-    const parts = [];
+    // Label-left, figure-right rows like every other tile (see .mrow): the
+    // dot-joined sentence wrapped at tile width and orphaned "· ~61p" on a
+    // line of its own (2026-08-23).
+    const rows = [];
     if (car.charging) {
-      if (car.until) { parts.push('until ' + car.until); }
+      rows.push(mrow('charging', car.until ? 'until ' + car.until : 'now', true));
       if (car.daytime) {
         // A daytime dispatch is the house-battery-feeds-car risk: amber, with
         // the battery's measured behaviour alongside (a fact, not an inference).
         card.style.setProperty('--ac', 'var(--amber)');
         if (t && !t.battery_charging && t.battery_power >= 10) {
-          parts.push('battery \u2193' + t.battery_power + ' W');
+          rows.push(mrow('battery', '\u2193' + t.battery_power + ' W'));
         }
       } else if (car.active_kwh) {
-        parts.push('+' + car.active_kwh + ' kWh');
+        rows.push(mrow('slot', '+' + car.active_kwh + ' kWh'));
       }
     } else if (car.next) {
-      parts.push(car.next.day + ' ' + car.next.start);
-      if (car.planned_kwh) { parts.push('~' + car.planned_kwh + ' kWh'); }
-      if (car.planned_gbp) { parts.push('~' + money(car.planned_gbp)); }
+      rows.push(mrow('next', car.next.day + ' ' + car.next.start, true));
+      const plan = [];
+      if (car.planned_kwh) { plan.push('~' + car.planned_kwh + ' kWh'); }
+      if (car.planned_gbp) { plan.push('~' + money(car.planned_gbp)); }
+      if (plan.length) {
+        rows.push(mrow('plan', plan.join(' \u00b7 ')));
+      }
     } else if (car.plug === 'plugged in') {
-      parts.push('no charge planned');
+      rows.push(mrow('plan', 'none'));
     }
-    if (parts.length) { note = parts.join(' \u00b7 '); }
+    if (rows.length) { note = rows.join(''); }
   }
-  document.getElementById('carrows').textContent = note;
+  const box = document.getElementById('carrows');
+  if (note.startsWith('<')) { box.innerHTML = note; } else { box.textContent = note; }
 }
 
 function applyLock() {

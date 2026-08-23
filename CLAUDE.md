@@ -85,8 +85,10 @@ exposes no car SOC or charger power. **Unplugged hides the tile entirely** and t
 falls back to five-across (renderCar toggles `hidden` + the grid's `six` class; the
 template no longer hardcodes `six`); anomalies (no link / unknown / unavailable) stay
 visible because they mean something is wrong. The plug word folds SmartFlexDeviceState:
-CAPABLE = plugged in, IN_PROGRESS/BOOSTING = charging, NOT_AVAILABLE = unplugged - the
-community/HA reading, observed consistent live but not Octopus-documented.
+CAPABLE = plugged in, IN_PROGRESS = plugged in with a plan (**not** charging - it held
+at 16:14 with the first dispatch ten hours off, fixed 2026-08-23), BOOSTING = charging,
+NOT_AVAILABLE = unplugged - the community/HA reading, observed live but not
+Octopus-documented. "Charging" otherwise means a dispatch brackets now.
 Six tiles fit one row only past ~1276px viewport (hence .wrap at 1300px and the .grid.six
 3-column rule between 1068-1275px). Sections below: tomorrow's weather and verdict, charge current,
 charge windows (with a timed-charging on/off switch in the section

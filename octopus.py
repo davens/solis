@@ -432,8 +432,11 @@ def _build_state(payload):
     # The currentState enum is not published anywhere verifiable, so match on
     # substrings and let an unrecognised state mean "not charging" - the
     # bracketing dispatch above is the signal that does not depend on guessing.
-    state_says_charging = any(word in state_text
-                              for word in ("BOOST", "CHARG", "IN_PROGRESS", "DISPATCH"))
+    # SMART_CONTROL_IN_PROGRESS is NOT charging: it is set for the whole time
+    # the car sits plugged in with a plan, and read as "charging" it lit the
+    # tile at 16:14 with the first dispatch ten hours away (2026-08-23). Only
+    # a boost, or a dispatch bracketing now, means current is flowing.
+    state_says_charging = "BOOST" in state_text
     charging = bool(active) or state_says_charging
 
     # .timestamp() for the same fold reason as _brackets.
