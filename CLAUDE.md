@@ -260,14 +260,28 @@ which is what pins the x0.1 scaling.
   self-use the house battery would otherwise discharge to feed it. An active *charge* window keeps the
   battery charging rather than draining. So tune `43141` (charge current, currently 50 A) and leave
   `43143` alone. Advice that says "shorten the window" is wrong for this setup.
-- **The rate that just fills the pack in the window is ~48 A, and 50 A is that rate.** ~15.4 kWh
-  over the 6 h window is 2.56 kW average, about 48 A at 53 V. So the applied 50 A is not generous
-  headroom - it is roughly the minimum that reaches full by 05:30 from empty, and anything below it
-  leaves the battery short. This corrects an earlier bullet that put the crossover at ~16 A: that
+- **The rate that just fills the pack in the window is ~48 A from 0%, ~45 A from the 10% floor.**
+  ~15.4 kWh over the 6 h window is 2.56 kW average, about 48 A at 53 V; from the real 10% floor
+  it is ~14.6 kWh after losses, 5.5 h at 50 A. So 50 A is not generous headroom - it is roughly
+  the minimum that reaches full by 05:30, and anything well below it leaves the battery short. This corrects an earlier bullet that put the crossover at ~16 A: that
   was computed from one module's 5.1 kWh instead of the three-module pack, and its advice ("drop
   below 16 A to leave room for solar") would have left the pack two-thirds empty. Trimming the rate
   to leave headroom for a high-solar day is still the owner's call, not an optimisation to apply
   unasked - but the number to trim from is 48, not 16.
+- **Charge overnight, export the sun - settled 2026-08-23, do not re-open.** `strategy_sim.py`
+  (half-hourly day sim, Monte-Carlo loads, SOC chained across days, live Octopus rates) found
+  plain timed charging - window on, 23:30-05:30, self-use, no daytime limit - within 2-8p/day of a
+  perfect-knowledge oracle at every sun level, including bright days with no car plugged in. The
+  reason is the tariff: export pays 12p, an overnight kWh costs 6.9p/0.9 = 7.7p delivered, so
+  every kWh of sun stored instead of sold loses ~4.3p. A SOC taper via 43117 (researched; 43012 is
+  BMS-overwritten, 43130 reportedly inert) gains <=6p/day and *loses* 20-70p when the Tesla
+  charges in daytime - not worth flash writes (endurance unpublished, plan on 10k; count every
+  43xxx write). Do not propose it again. The one lever with money in it is a daytime Tesla
+  dispatch: in self-use the pack feeds the car at 5 kW, and forcing the charge window on for the
+  dispatch is worth 30p-1.50 per occurrence - parked, needs a bulletproof restore (a slot left set
+  grid-charges at 30p). The owner set 43141 to 50 A deliberately: 0.17C on the 300 Ah pack, fills
+  from the 10% floor in ~5.5 h, may stop at 97-98% on an empty-start night, which is accepted as
+  kinder to LFP than holding at 100%. The floor is 10%, not 20%.
 - **The owner does not want to discharge to grid.** All three discharge windows are intentionally unset and must stay that way — never propose enabling one, and never frame the unused slots as headroom to exploit. Charging (slot 1, 23:30–04:30 off-peak) is the only timed behaviour wanted.
 - **Battery charge/discharge tops out at 5 kW** (owner-stated), under the inverter's 6 kW.
 - **`43142` does not cap house supply.** Per the owner it limits timed discharge *to grid* (export rate); self-use house supply is demand-driven and bypasses it. Deliberately set to 50 A — do not "helpfully" raise it toward the 100 A capability in `43013`. With every discharge window unset it has no effect at all.
