@@ -166,3 +166,26 @@ camera centre - setting them makes the scene disagree with itself, which is why
 they are not used. And a dragged camera writes `helios:camera-pose:<lat>:<lon>`
 to the browser's localStorage, which then outranks `camera-pitch-deg` for good;
 clear the `helios*` keys to get the configured framing back.
+
+### Grid voltage chart (2026-08-27)
+
+The Energy view carries a grid-voltage plot between the house-load heatmap and
+the Sankey: `sensor.solis_inverter_grid_voltage` raw over 24 h, with the hourly
+statistics min/max drawn as a translucent band behind it, and the UK statutory
+supply limits (230 V +10% / -6%, so **253.0 V** and **216.2 V**) as dashed
+reference lines with a faint green band between them. The y-axis is pinned to
+212-257 V deliberately: the question this chart answers is *how much headroom
+is left to the upper limit*, which an autoranged axis destroys by zooming into
+a few volts of noise. This is a live view of a healthy grid - it is **not** a
+revival of the retired voltage logger and its DNO evidence trail (see
+CLAUDE.md); no database, no launchd job, nothing to backfill.
+
+The band only spans as far back as the integration's own long-term statistics,
+so it grew in behind the line over the first day.
+
+**`raw_plotly_config: true` means the card does not map fetched data onto the
+traces.** Every entity needs an explicit `x: $ex xs` / `y: $ex ys`. Without it
+the card renders the axes, title and shapes perfectly and plots *nothing* - no
+console error, just a default numeric x-axis reading -1..6, which looks like a
+data problem and is not one. The other plotly cards on this view already did
+this; it is only obvious once you have been caught by it.

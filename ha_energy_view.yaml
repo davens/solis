@@ -66,20 +66,20 @@ sections:
   cards:
   - type: energy-date-selection
     card_mod:
-      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius:\
-        \ 16px;\n  box-shadow: none;\n}\n"
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius: 16px;\n\
+        \  box-shadow: none;\n}\n"
     grid_options:
       columns: full
   - type: energy-self-sufficiency-gauge
     card_mod:
-      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius:\
-        \ 16px;\n  box-shadow: none;\n}\n"
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius: 16px;\n\
+        \  box-shadow: none;\n}\n"
     grid_options:
       columns: full
   - type: energy-solar-consumed-gauge
     card_mod:
-      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius:\
-        \ 16px;\n  box-shadow: none;\n}\n"
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius: 16px;\n\
+        \  box-shadow: none;\n}\n"
     grid_options:
       columns: full
 - type: grid
@@ -87,8 +87,8 @@ sections:
   cards:
   - type: energy-distribution
     card_mod:
-      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius:\
-        \ 16px;\n  box-shadow: none;\n}\n"
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius: 16px;\n\
+        \  box-shadow: none;\n}\n"
     grid_options:
       columns: full
 - type: grid
@@ -126,8 +126,8 @@ sections:
       label: Solar
       state_size: small
     card_mod:
-      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius:\
-        \ 16px;\n  box-shadow: none;\n}\n"
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius: 16px;\n\
+        \  box-shadow: none;\n}\n"
     grid_options:
       columns: full
 - type: grid
@@ -185,19 +185,19 @@ sections:
         zeroline: false
         fixedrange: true
       showlegend: false
-      shapes: "$fn () => {\n  const DAY = 86400e3;\n  const now = new Date();\n  const lo = now.getTime()\
-        \ - DAY, hi = now.getTime() + DAY;\n  const at = (base, h, m) => { const d = new Date(base); d.setHours(h,\
-        \ m, 0, 0); return d; };\n  const shapes = [];\n  for (let off = -2; off <= 1; off++) {\n    const\
-        \ base = new Date(now.getTime() + off * DAY);\n    const x0 = Math.max(lo, at(base, 23, 30).getTime());\n\
-        \    const x1 = Math.min(hi, at(base, 5, 30).getTime() + DAY);\n    if (x1 <= x0) { continue;\
-        \ }\n    shapes.push({type: \"rect\", xref: \"x\", yref: \"paper\", x0: x0, x1: x1,\n        \
-        \         y0: 0, y1: 1, fillcolor: \"rgba(79, 143, 255, 0.10)\",\n                 line: {width:\
-        \ 0}, layer: \"below\"});\n  }\n  shapes.push({type: \"line\", xref: \"x\", yref: \"paper\",\n\
-        \               x0: now.getTime(), x1: now.getTime(), y0: 0, y1: 1,\n               line: {color:\
-        \ \"rgba(255,255,255,0.45)\", width: 1, dash: \"dot\"}});\n  return shapes;\n}"
+      shapes: "$fn () => {\n  const DAY = 86400e3;\n  const now = new Date();\n  const lo = now.getTime() - DAY,\
+        \ hi = now.getTime() + DAY;\n  const at = (base, h, m) => { const d = new Date(base); d.setHours(h, m, 0,\
+        \ 0); return d; };\n  const shapes = [];\n  for (let off = -2; off <= 1; off++) {\n    const base = new\
+        \ Date(now.getTime() + off * DAY);\n    const x0 = Math.max(lo, at(base, 23, 30).getTime());\n    const\
+        \ x1 = Math.min(hi, at(base, 5, 30).getTime() + DAY);\n    if (x1 <= x0) { continue; }\n    shapes.push({type:\
+        \ \"rect\", xref: \"x\", yref: \"paper\", x0: x0, x1: x1,\n                 y0: 0, y1: 1, fillcolor: \"\
+        rgba(79, 143, 255, 0.10)\",\n                 line: {width: 0}, layer: \"below\"});\n  }\n  shapes.push({type:\
+        \ \"line\", xref: \"x\", yref: \"paper\",\n               x0: now.getTime(), x1: now.getTime(), y0: 0, y1:\
+        \ 1,\n               line: {color: \"rgba(255,255,255,0.45)\", width: 1, dash: \"dot\"}});\n  return shapes;\n\
+        }"
     card_mod:
-      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius:\
-        \ 16px;\n  box-shadow: none;\n}\n"
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius: 16px;\n\
+        \  box-shadow: none;\n}\n"
     grid_options:
       columns: full
       rows: 6
@@ -214,16 +214,15 @@ sections:
       period: hour
       type: heatmap
       hoverongaps: false
-      fn: "$fn ({ xs, ys, vars }) => {\n  const days = [];\n  const dayIndex = new Map();\n  const today\
-        \ = new Date();\n  today.setHours(0, 0, 0, 0);\n  for (let off = 20; off >= 0; off--) {\n    const\
-        \ d = new Date(today);\n    d.setDate(d.getDate() - off);\n    dayIndex.set(d.toDateString(),\
-        \ days.length);\n    days.push(\n      d.toLocaleDateString(undefined, { day: \"numeric\", month:\
-        \ \"short\" })\n    );\n  }\n  const hours = [];\n  for (let h = 0; h < 24; h++) {\n    hours.push(String(h).padStart(2,\
-        \ \"0\") + \":00\");\n  }\n  const z = hours.map(() => days.map(() => null));\n  for (let i =\
-        \ 0; i < xs.length; i++) {\n    if (ys[i] === null || ys[i] === undefined) { continue; }\n   \
-        \ const di = dayIndex.get(xs[i].toDateString());\n    if (di === undefined) { continue; }\n  \
-        \  z[xs[i].getHours()][di] = Math.round(+ys[i]);\n  }\n  vars.hm_x = days;\n  vars.hm_y = hours;\n\
-        \  vars.hm_z = z;\n}\n"
+      fn: "$fn ({ xs, ys, vars }) => {\n  const days = [];\n  const dayIndex = new Map();\n  const today = new Date();\n\
+        \  today.setHours(0, 0, 0, 0);\n  for (let off = 20; off >= 0; off--) {\n    const d = new Date(today);\n\
+        \    d.setDate(d.getDate() - off);\n    dayIndex.set(d.toDateString(), days.length);\n    days.push(\n \
+        \     d.toLocaleDateString(undefined, { day: \"numeric\", month: \"short\" })\n    );\n  }\n  const hours\
+        \ = [];\n  for (let h = 0; h < 24; h++) {\n    hours.push(String(h).padStart(2, \"0\") + \":00\");\n  }\n\
+        \  const z = hours.map(() => days.map(() => null));\n  for (let i = 0; i < xs.length; i++) {\n    if (ys[i]\
+        \ === null || ys[i] === undefined) { continue; }\n    const di = dayIndex.get(xs[i].toDateString());\n \
+        \   if (di === undefined) { continue; }\n    z[xs[i].getHours()][di] = Math.round(+ys[i]);\n  }\n  vars.hm_x\
+        \ = days;\n  vars.hm_y = hours;\n  vars.hm_z = z;\n}\n"
       x: $fn ({ vars }) => vars.hm_x
       y: $fn ({ vars }) => vars.hm_y
       z: $fn ({ vars }) => vars.hm_z
@@ -274,11 +273,154 @@ sections:
         type: category
         autorange: reversed
     card_mod:
-      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius:\
-        \ 16px;\n  box-shadow: none;\n}\n"
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius: 16px;\n\
+        \  box-shadow: none;\n}\n"
     grid_options:
       columns: full
       rows: 8
+- type: grid
+  column_span: 4
+  cards:
+  - type: custom:plotly-graph
+    raw_plotly_config: true
+    hours_to_show: 1d
+    refresh_interval: 60
+    entities:
+    - entity: sensor.solis_inverter_grid_voltage
+      name: Hourly max
+      statistic: max
+      period: hour
+      type: scatter
+      mode: lines
+      x: $ex xs
+      y: $ex ys
+      line:
+        width: 0
+        shape: spline
+        smoothing: 0.5
+      hoverinfo: skip
+      showlegend: false
+    - entity: sensor.solis_inverter_grid_voltage
+      name: Hourly range
+      statistic: min
+      period: hour
+      type: scatter
+      mode: lines
+      x: $ex xs
+      y: $ex ys
+      line:
+        width: 0
+        shape: spline
+        smoothing: 0.5
+      fill: tonexty
+      fillcolor: rgba(120, 170, 255, 0.13)
+      hoverinfo: skip
+      showlegend: false
+    - entity: sensor.solis_inverter_grid_voltage
+      name: Grid voltage
+      type: scatter
+      mode: lines
+      x: $ex xs
+      y: $ex ys
+      line:
+        color: '#7ab8ff'
+        width: 1.6
+        shape: spline
+        smoothing: 0.4
+      hovertemplate: '%{y:.1f} V<extra></extra>'
+    config:
+      displayModeBar: false
+      scrollZoom: false
+    layout:
+      height: 300
+      margin:
+        t: 30
+        r: 20
+        b: 40
+        l: 45
+      paper_bgcolor: rgba(0,0,0,0)
+      plot_bgcolor: rgba(0,0,0,0)
+      font:
+        color: '#9e9e9e'
+        size: 11
+      title:
+        text: Grid voltage — 24 h against the statutory band
+        font:
+          color: '#e0e0e0'
+          size: 14
+      xaxis:
+        gridcolor: rgba(255,255,255,0.05)
+        zeroline: false
+      yaxis:
+        range:
+        - 212.2
+        - 257.0
+        ticksuffix: ' V'
+        gridcolor: rgba(255,255,255,0.05)
+        zeroline: false
+        fixedrange: true
+      showlegend: false
+      shapes:
+      - type: rect
+        xref: paper
+        yref: y
+        x0: 0
+        x1: 1
+        y0: 216.2
+        y1: 253.0
+        fillcolor: rgba(102, 187, 106, 0.06)
+        line:
+          width: 0
+        layer: below
+      - type: line
+        xref: paper
+        yref: y
+        x0: 0
+        x1: 1
+        y0: 253.0
+        y1: 253.0
+        line:
+          color: rgba(239, 83, 80, 0.55)
+          width: 1
+          dash: dash
+      - type: line
+        xref: paper
+        yref: y
+        x0: 0
+        x1: 1
+        y0: 216.2
+        y1: 216.2
+        line:
+          color: rgba(239, 83, 80, 0.55)
+          width: 1
+          dash: dash
+      annotations:
+      - xref: paper
+        yref: y
+        x: 0.995
+        y: 253.0
+        text: 253.0 V
+        showarrow: false
+        yanchor: bottom
+        font:
+          color: rgba(239, 83, 80, 0.8)
+          size: 10
+      - xref: paper
+        yref: y
+        x: 0.995
+        y: 216.2
+        text: 216.2 V
+        showarrow: false
+        yanchor: top
+        font:
+          color: rgba(239, 83, 80, 0.8)
+          size: 10
+    card_mod:
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius: 16px;\n\
+        \  box-shadow: none;\n}\n"
+    grid_options:
+      columns: full
+      rows: 6
 - type: grid
   column_span: 4
   cards:
@@ -362,8 +504,8 @@ sections:
     - source: sensor.solis_inverter_battery_discharge_today
       target: untracked_energy
     card_mod:
-      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius:\
-        \ 16px;\n  box-shadow: none;\n}\n"
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius: 16px;\n\
+        \  box-shadow: none;\n}\n"
     grid_options:
       columns: full
       rows: 7
@@ -372,8 +514,8 @@ sections:
   cards:
   - type: energy-usage-graph
     card_mod:
-      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius:\
-        \ 16px;\n  box-shadow: none;\n}\n"
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius: 16px;\n\
+        \  box-shadow: none;\n}\n"
     grid_options:
       columns: full
 - type: grid
@@ -381,7 +523,7 @@ sections:
   cards:
   - type: energy-solar-graph
     card_mod:
-      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius:\
-        \ 16px;\n  box-shadow: none;\n}\n"
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius: 16px;\n\
+        \  box-shadow: none;\n}\n"
     grid_options:
       columns: full
