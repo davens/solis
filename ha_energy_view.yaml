@@ -1,0 +1,361 @@
+# Home Assistant "Energy" view (Overview dashboard, path /lovelace/energy).
+# Applied live via websocket lovelace/config/save on 2026-08-27; this file is the
+# record, not the source of truth - edit HA, then re-export.
+#
+# HACS cards it needs: ReikanYsora/Helios, MindFreeze/ha-sankey-chart,
+# selvalt7/modern-circular-gauge, dbuezas/lovelace-plotly-graph-card, card-mod.
+# Every date-scoped card follows the single energy-date-selection card.
+title: Energy
+path: energy
+icon: mdi:lightning-bolt
+type: sections
+max_columns: 4
+sections:
+- type: grid
+  column_span: 4
+  cards:
+  - type: custom:helios-card
+    map-theme-mode: dark
+    auto-hide-ui: false
+    auto-rotate-enabled: false
+    camera-pitch-deg: 50
+    show-timeline: true
+    show-sun-times: true
+    show-detail-panel: true
+    show-cost: true
+    shadows-enabled: true
+    power-unit: kW
+    energy-unit: auto
+    value-decimals: 1
+    max-expected-power: 6000
+    battery-chip-mode: soc
+    sun-chip-mode: irradiance
+    weather-enabled: true
+    weather-entity: weather.forecast_home_2
+    grid_options:
+      columns: full
+      rows: 9
+- type: grid
+  column_span: 1
+  cards:
+  - type: energy-date-selection
+    card_mod:
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius:\
+        \ 16px;\n  box-shadow: none;\n}\n"
+    grid_options:
+      columns: full
+  - type: energy-self-sufficiency-gauge
+    card_mod:
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius:\
+        \ 16px;\n  box-shadow: none;\n}\n"
+    grid_options:
+      columns: full
+  - type: energy-solar-consumed-gauge
+    card_mod:
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius:\
+        \ 16px;\n  box-shadow: none;\n}\n"
+    grid_options:
+      columns: full
+- type: grid
+  column_span: 2
+  cards:
+  - type: energy-distribution
+    card_mod:
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius:\
+        \ 16px;\n  box-shadow: none;\n}\n"
+    grid_options:
+      columns: full
+- type: grid
+  column_span: 1
+  cards:
+  - type: custom:modern-circular-gauge
+    entity: sensor.solis_inverter_battery
+    name: Battery
+    unit: '%'
+    min: 0
+    max: 100
+    show_state: true
+    segments:
+    - from: 0
+      color:
+      - 239
+      - 83
+      - 80
+    - from: 10
+      color:
+      - 255
+      - 183
+      - 77
+    - from: 50
+      color:
+      - 102
+      - 187
+      - 106
+    secondary:
+      entity: sensor.solis_inverter_solar_power
+      show_gauge: inner
+      min: 0
+      max: 6000
+      unit: W
+      label: Solar
+      state_size: small
+    card_mod:
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius:\
+        \ 16px;\n  box-shadow: none;\n}\n"
+    grid_options:
+      columns: full
+- type: grid
+  column_span: 4
+  cards:
+  - type: custom:plotly-graph
+    raw_plotly_config: true
+    hours_to_show: 2d
+    time_offset: 1d
+    refresh_interval: 60
+    entities:
+    - entity: sensor.solis_inverter_battery
+      name: Battery SOC
+      type: scatter
+      mode: lines
+      x: $ex xs
+      y: $ex ys
+      line:
+        color: '#66bb6a'
+        width: 2
+        shape: spline
+        smoothing: 0.6
+      fill: tozeroy
+      fillcolor: rgba(102, 187, 106, 0.12)
+      hovertemplate: '%{y:.0f}%<extra>SOC</extra>'
+    config:
+      displayModeBar: false
+      scrollZoom: false
+    layout:
+      height: 320
+      margin:
+        t: 30
+        r: 20
+        b: 40
+        l: 45
+      paper_bgcolor: rgba(0,0,0,0)
+      plot_bgcolor: rgba(0,0,0,0)
+      font:
+        color: '#9e9e9e'
+        size: 11
+      title:
+        text: Battery SOC — charge windows shaded
+        font:
+          color: '#e0e0e0'
+          size: 14
+      xaxis:
+        gridcolor: rgba(255,255,255,0.05)
+        zeroline: false
+      yaxis:
+        range:
+        - 0
+        - 100
+        ticksuffix: '%'
+        gridcolor: rgba(255,255,255,0.05)
+        zeroline: false
+        fixedrange: true
+      showlegend: false
+      shapes: "$fn () => {\n  const DAY = 86400e3;\n  const now = new Date();\n  const lo = now.getTime()\
+        \ - DAY, hi = now.getTime() + DAY;\n  const at = (base, h, m) => { const d = new Date(base); d.setHours(h,\
+        \ m, 0, 0); return d; };\n  const shapes = [];\n  for (let off = -2; off <= 1; off++) {\n    const\
+        \ base = new Date(now.getTime() + off * DAY);\n    const x0 = Math.max(lo, at(base, 23, 30).getTime());\n\
+        \    const x1 = Math.min(hi, at(base, 5, 30).getTime() + DAY);\n    if (x1 <= x0) { continue;\
+        \ }\n    shapes.push({type: \"rect\", xref: \"x\", yref: \"paper\", x0: x0, x1: x1,\n        \
+        \         y0: 0, y1: 1, fillcolor: \"rgba(79, 143, 255, 0.10)\",\n                 line: {width:\
+        \ 0}, layer: \"below\"});\n  }\n  shapes.push({type: \"line\", xref: \"x\", yref: \"paper\",\n\
+        \               x0: now.getTime(), x1: now.getTime(), y0: 0, y1: 1,\n               line: {color:\
+        \ \"rgba(255,255,255,0.45)\", width: 1, dash: \"dot\"}});\n  return shapes;\n}"
+    card_mod:
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius:\
+        \ 16px;\n  box-shadow: none;\n}\n"
+    grid_options:
+      columns: full
+      rows: 6
+- type: grid
+  column_span: 4
+  cards:
+  - type: custom:plotly-graph
+    raw_plotly_config: true
+    hours_to_show: 504
+    refresh_interval: 300
+    entities:
+    - entity: sensor.solis_inverter_house_load
+      statistic: mean
+      period: hour
+      type: heatmap
+      hoverongaps: false
+      fn: "$fn ({ xs, ys, vars }) => {\n  const days = [];\n  const dayIndex = new Map();\n  const today\
+        \ = new Date();\n  today.setHours(0, 0, 0, 0);\n  for (let off = 20; off >= 0; off--) {\n    const\
+        \ d = new Date(today);\n    d.setDate(d.getDate() - off);\n    dayIndex.set(d.toDateString(),\
+        \ days.length);\n    days.push(\n      d.toLocaleDateString(undefined, { day: \"numeric\", month:\
+        \ \"short\" })\n    );\n  }\n  const hours = [];\n  for (let h = 0; h < 24; h++) {\n    hours.push(String(h).padStart(2,\
+        \ \"0\") + \":00\");\n  }\n  const z = hours.map(() => days.map(() => null));\n  for (let i =\
+        \ 0; i < xs.length; i++) {\n    if (ys[i] === null || ys[i] === undefined) { continue; }\n   \
+        \ const di = dayIndex.get(xs[i].toDateString());\n    if (di === undefined) { continue; }\n  \
+        \  z[xs[i].getHours()][di] = Math.round(+ys[i]);\n  }\n  vars.hm_x = days;\n  vars.hm_y = hours;\n\
+        \  vars.hm_z = z;\n}\n"
+      x: $fn ({ vars }) => vars.hm_x
+      y: $fn ({ vars }) => vars.hm_y
+      z: $fn ({ vars }) => vars.hm_z
+      zmin: 0
+      colorscale:
+      - - 0
+        - '#111418'
+      - - 0.3
+        - '#1f4068'
+      - - 0.6
+        - '#2d9cdb'
+      - - 0.85
+        - '#f2c94c'
+      - - 1
+        - '#ff8a65'
+      colorbar:
+        thickness: 10
+        outlinewidth: 0
+        ticksuffix: ' W'
+        tickfont:
+          color: '#9e9e9e'
+          size: 10
+      hovertemplate: '%{x} %{y} — %{z} W<extra></extra>'
+    config:
+      displayModeBar: false
+      scrollZoom: false
+    layout:
+      height: 420
+      margin:
+        t: 30
+        r: 10
+        b: 40
+        l: 55
+      paper_bgcolor: rgba(0,0,0,0)
+      plot_bgcolor: rgba(0,0,0,0)
+      font:
+        color: '#9e9e9e'
+        size: 11
+      title:
+        text: House load — hour of day x last 21 days
+        font:
+          color: '#e0e0e0'
+          size: 14
+      xaxis:
+        type: category
+        tickangle: -45
+      yaxis:
+        type: category
+        autorange: reversed
+    card_mod:
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius:\
+        \ 16px;\n  box-shadow: none;\n}\n"
+    grid_options:
+      columns: full
+      rows: 8
+- type: grid
+  column_span: 4
+  cards:
+  - type: custom:sankey-chart
+    title: Energy flow
+    energy_date_selection: true
+    ignore_missing_entities: true
+    layout: horizontal
+    height: 360
+    unit_prefix: k
+    round: 1
+    show_icons: false
+    show_names: true
+    show_states: true
+    show_units: true
+    min_box_size: 8
+    min_box_distance: 8
+    box_thickness: 18
+    connection_margin: 6
+    min_state: 0.01
+    throttle: 1000
+    sections:
+    - min_width: 170
+      sort_by: state
+      sort_dir: desc
+    - min_width: 150
+      sort_by: none
+    - min_width: 190
+      sort_by: state
+      sort_dir: desc
+      sort_group_by_parent: true
+    nodes:
+    - id: sensor.solis_inverter_solar_today
+      name: Solar
+      section: 0
+      color: var(--warning-color)
+    - id: sensor.solis_inverter_grid_import_today
+      name: Grid import
+      section: 0
+      color: var(--info-color)
+    - id: sensor.solis_inverter_battery_discharge_today
+      name: Battery out
+      section: 0
+      color: var(--success-color)
+    - id: sensor.solis_inverter_house_consumption_today
+      name: House
+      section: 1
+      color: var(--primary-color)
+    - id: sensor.solis_inverter_battery_charge_today
+      name: Battery in
+      section: 2
+      color: var(--success-color)
+    - id: sensor.solis_inverter_grid_export_today
+      name: Grid export
+      section: 2
+      color: var(--error-color)
+    - id: untracked_energy
+      type: remaining_parent_state
+      name: Untracked / losses
+      section: 2
+      color: var(--secondary-text-color)
+    links:
+    - source: sensor.solis_inverter_solar_today
+      target: sensor.solis_inverter_house_consumption_today
+    - source: sensor.solis_inverter_grid_import_today
+      target: sensor.solis_inverter_house_consumption_today
+    - source: sensor.solis_inverter_battery_discharge_today
+      target: sensor.solis_inverter_house_consumption_today
+    - source: sensor.solis_inverter_solar_today
+      target: sensor.solis_inverter_battery_charge_today
+    - source: sensor.solis_inverter_grid_import_today
+      target: sensor.solis_inverter_battery_charge_today
+    - source: sensor.solis_inverter_solar_today
+      target: sensor.solis_inverter_grid_export_today
+    - source: sensor.solis_inverter_battery_discharge_today
+      target: sensor.solis_inverter_grid_export_today
+    - source: sensor.solis_inverter_solar_today
+      target: untracked_energy
+    - source: sensor.solis_inverter_grid_import_today
+      target: untracked_energy
+    - source: sensor.solis_inverter_battery_discharge_today
+      target: untracked_energy
+    card_mod:
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius:\
+        \ 16px;\n  box-shadow: none;\n}\n"
+    grid_options:
+      columns: full
+      rows: 7
+- type: grid
+  column_span: 2
+  cards:
+  - type: energy-usage-graph
+    card_mod:
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius:\
+        \ 16px;\n  box-shadow: none;\n}\n"
+    grid_options:
+      columns: full
+- type: grid
+  column_span: 2
+  cards:
+  - type: energy-solar-graph
+    card_mod:
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius:\
+        \ 16px;\n  box-shadow: none;\n}\n"
+    grid_options:
+      columns: full
