@@ -60,6 +60,7 @@ sections:
     map-color-roadMajor: '#5b6480'
     map-color-roadMinor: '#394053'
     map-color-roadCasing: '#0d1017'
+    camera-locked: false
 - type: grid
   column_span: 1
   cards:

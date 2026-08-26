@@ -135,3 +135,34 @@ this one. The built-in energy *config* UI is untouched at `/config/energy`.
 A storage dashboard's `url_path` must contain a hyphen, hence `energy-live`
 rather than `energy`; the sidebar label reads Energy either way.
 The yaml is a record of what is live, not the source: edit in HA and re-export.
+
+### Home coordinates and the Helios building highlight (2026-08-27)
+
+Helios highlights **the OSM building nearest the configured home**, and OSM has
+no building polygon at the house at all - 70 buildings within 250 m, none
+containing the address point, nearest centre 35 m away. An Overpass query for
+addressed features on the street returns nothing either. So the highlight lands
+on whatever neighbour is closest, and no amount of coordinate accuracy fixes
+that on its own.
+
+Two separate errors were untangled here:
+
+1. HA's own home was **98 m off** (96 m north, 20 m east) - address geocoding,
+   not a Helios problem. It fed sun times, weather and `zone.home` presence.
+2. Even at the true address, the highlight stayed wrong, because of the OSM gap
+   above.
+
+`zone.home` is therefore parked on the **centroid of the owner's actual building
+polygon** (REDACTED_LAT, REDACTED_LON), which is ~35 m from the postal address point
+but inside the right footprint - so the ring, the chips and the highlighted
+house all coincide. That is a deliberate trade: 35 m of address error buys a
+correct-looking scene, and it is well inside the 100 m `zone.home` radius so
+presence detection is unaffected. Do not "correct" it back to the postal
+coordinate without re-reading this.
+
+Two Helios traps worth remembering: the card's own `home-latitude` /
+`home-longitude` move **only the building highlight**, not the ring, chips or
+camera centre - setting them makes the scene disagree with itself, which is why
+they are not used. And a dragged camera writes `helios:camera-pose:<lat>:<lon>`
+to the browser's localStorage, which then outranks `camera-pitch-deg` for good;
+clear the `helios*` keys to get the configured framing back.
