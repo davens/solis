@@ -127,5 +127,11 @@ Cost is computed per consumption delta against the price entity at that instant,
 so the 10 s poll gives near-exact off-peak/peak attribution. The **standing
 charge is not included** - the dashboard shows unit cost only.
 
-`ha_energy_view.yaml` is the exported Lovelace view (Overview -> Energy tab).
-It is a record of what is live, not the source: edit in HA and re-export.
+`ha_energy_view.yaml` is the exported Lovelace view. It lives in its own
+storage dashboard, `energy-live`, which **is** the sidebar's Energy entry -
+HA's built-in energy panel is hidden from the sidebar (per-user frontend
+`user_data`: `hiddenPanels: ["energy"]`), so there is one Energy and it is
+this one. The built-in energy *config* UI is untouched at `/config/energy`.
+A storage dashboard's `url_path` must contain a hyphen, hence `energy-live`
+rather than `energy`; the sidebar label reads Energy either way.
+The yaml is a record of what is live, not the source: edit in HA and re-export.
