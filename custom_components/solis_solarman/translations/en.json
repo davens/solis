@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Solis inverter via Solarman logger",
+        "data": {
+          "host": "Logger IP address",
+          "serial": "Logger serial number",
+          "port": "Port",
+          "scan_interval": "Poll interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the logger. Check the IP, and remember it accepts only one Modbus session at a time - stop any dashboard or script that is already connected."
+    },
+    "abort": {
+      "already_configured": "This logger is already configured."
+    }
+  }
+}
