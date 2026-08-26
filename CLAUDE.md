@@ -16,7 +16,9 @@ No `pyproject.toml` or `requirements.txt`, and the system Python has none of the
 uv run --no-project python scan.py                                   # find logger (stdlib only)
 uv run --no-project --with pysolarmanv5 python control.py show
 uv run --no-project --with pysolarmanv5 python control.py charge-current 50 --apply
-uv run --no-project --with flask --with pysolarmanv5 python settings_dash.py   # control UI on :5051
+uv run --no-project --with flask --with pysolarmanv5 python settings_dash.py   # local dashboard on :5051
+uv run --no-project --with flask --with pysolarmanv5 python solis_api.py       # API only (what Docker runs)
+docker compose up -d --build             # read-only API for Home Assistant; see homeassistant.md
 uv run --no-project python solar_forecast.py                          # tomorrow's kWh + verdict
 uv run --no-project python solar_forecast.py record 2026-08-20 32     # log an actual
 uv run --no-project python solar_forecast.py calibrate                # refit against actuals
@@ -26,13 +28,27 @@ No tests, no linter, no build step.
 
 ## Architecture
 
-**Read path.** `settings_dash.py` owns it: a daemon thread holds one Solarman V5 session, sweeps telemetry and settings every 10 s, and serves the cache through `/api/state`. On any exception `_drop_session()` sets the session to `None` so the next sweep reconnects — that null-and-retry is the entire error strategy, inherited from the retired logger.
+**Read path.** `solis_api.py` owns it (split out of `settings_dash.py` 2026-08-26): a daemon thread holds one Solarman V5 session, sweeps telemetry and settings every 10 s, and serves the cache through `/api/state`. On any exception `_drop_session()` sets the session to `None` so the next sweep reconnects — that null-and-retry is the entire error strategy, inherited from the retired logger.
 
-**Control path.** `control.py` writes holding registers over the same session: dry-run unless `--apply`, validates ranges, reads back every write, hard-refuses `PROTECTED`. It replaced an MQTT/Node-RED indirection (`mqtt_pub.py`, `mqtt_2.py`, deleted 2026-08-21) that published `struct.pack('<H', v)` to `nodered/solis/*` via a broker now requiring credentials nobody has. Direct Modbus needs no broker — **do not reintroduce that hop.**
+**Control path.** `control.py` is now the *only* write path - the dashboard and API are fully
+read-only (see below). It writes holding registers over its own session: dry-run unless `--apply`, validates ranges, reads back every write, hard-refuses `PROTECTED`. It replaced an MQTT/Node-RED indirection (`mqtt_pub.py`, `mqtt_2.py`, deleted 2026-08-21) that published `struct.pack('<H', v)` to `nodered/solis/*` via a broker now requiring credentials nobody has. Direct Modbus needs no broker — **do not reintroduce that hop.**
 
 **Address resolution.** `solis_net.py` is the single place that knows how to reach the logger: `$SOLIS_HOST` override → UDP broadcast discovery by serial → `LAST_KNOWN` fallback. `control.py` and `settings_dash.py` both go through it, so a DHCP move needs no code change. `scan.py` is the standalone version of the same broadcast (`WIFIKIT-214028-READ` to port 48899, reply `ipaddress,mac,serial`).
 
 Discovery is layer-2 only — it works when the client shares a segment with the logger, and silently falls back otherwise. Across a routed boundary, set `SOLIS_HOST`.
+
+**Backend / front-end split and Docker (2026-08-26).** Three files where there was one:
+`solis_api.py` is the backend - registers, poller, `/api/state`, `/api/health` (200 while
+sweeps are fresh, 503 otherwise) - `dash.py` is the browser front end (the `PAGE` HTML as a
+Flask blueprint on `/`), and `settings_dash.py` is a thin local entry point that mounts the
+blueprint on the API app and serves both on :5051. Home Assistant consumes `/api/state`
+directly and never sees the dash: the `Dockerfile` deliberately omits `dash.py` and runs
+`solis_api.py` alone. Mutable files (`solar_actuals.json`, `.solar_cache.json`,
+`energy_cost.json`) follow `$SOLIS_DATA_DIR` (both `solis_api.py` and `solar_forecast.py`
+honour it; unset means beside the code) so the container keeps them on a `/data` volume -
+seed it with the repo's json files on first run. Discovery broadcasts cannot cross the
+Docker bridge, so the compose file sets `SOLIS_HOST`. `homeassistant.md` carries the HA
+`rest:` sensor config. `SOLIS_PORT` overrides the port.
 
 **Solar forecast.** `solar_forecast.py` answers one question: will tomorrow's sun refill the battery,
 or should the off-peak window? `tomorrow_kwh()`, `today_kwh()`, `verdict()` and `tomorrow_weather()` are
@@ -91,11 +107,9 @@ NOT_AVAILABLE = unplugged - the community/HA reading, observed live but not
 Octopus-documented. "Charging" otherwise means a dispatch brackets now.
 Six tiles fit one row only past ~1276px viewport (hence .wrap at 1300px and the .grid.six
 3-column rule between 1068-1275px). Sections below: tomorrow's weather and verdict, charge current,
-charge windows (with a timed-charging on/off switch in the section
-head - 43110 bit1, read-modify-write so the other mode bits are untouched; off dims the
-windows *and* the charge-current section as inert, and arms like Clear because a plugged-in
-Tesla drains the unheld battery at up to 5 kW), work mode (read-only), diagnostics. `settings_dash.py` is the browser front end for
-the control path. A daemon
+charge windows (with a timed-charging status
+tag in the section head - 43110 bit1, display only; off still dims the windows and
+charge-current sections as inert), work mode, diagnostics - all read-only. A daemon
 thread holds one Solarman session and refreshes a cache every 10 s; the browser polls `/api/state`,
 so page refreshes never hit the logger. `/api/state` carries `read_at_epoch` as well as the display
 string, because a *frozen* poller is otherwise indistinguishable from a healthy one - the browser
@@ -117,60 +131,38 @@ would otherwise be labelled SW. `PV_PLANES` maps that index to SW/SE on the **in
 confirmed against a traced cable. And `[hidden]{display:none!important}` is required, because
 `.pvrows` is `display:grid`, which otherwise beats the `hidden` attribute and leaves the bars
 showing all night.
-**Rules engine (2026-08-22): the poller can now write, not just read.** `RULES` in
-`settings_dash.py` is evaluated after every fresh sweep, under `_lock`. The first rule:
-battery SOC below 20% with timed charging off -> set 43110 bit1 (read-modify-write). Rules
-fire **at most once per episode** - armed while the condition is false, fire on the first
-true sweep, disarmed until it goes false again - so an owner who flips the switch back off
-after a firing is respected, not fought. Never fires on a failed sweep or an SOC of 0 (a
-bogus read, not an empty battery). Firings surface in the diagnostics "last rule" row (kept
-in `_rule_event`, outside `_state`, which `_refresh()` rebuilds). More rules are planned;
-add them to `RULES`, keep the once-per-episode latch.
-
-**Write safety lives in the front end as well as the guards.** Apply disables every button until the
-readback lands (a Modbus write is slow enough to double-click through, and each click was a second
-register write); Clear arms to "Confirm?" for 5 s before it will fire, because clearing slot 1 wipes
-the off-peak window this system depends on; slot Apply stays disabled until both times are filled.
-Edited-but-unapplied inputs mark themselves "not applied" and are no longer overwritten by the poll -
-the slot rows rebuild only when the *inverter's* values change, so a half-typed time survives.
-Slots 2 and 3 sit behind a disclosure: they are unused forever and do not deserve equal weight.
+**The dashboard cannot write - at all (2026-08-26, owner's decision).** Two removals in one
+day: first the rules engine went (added 2026-08-22: SOC < 20% -> set 43110 bit1, once per
+episode), then the entire write path - `/api/write`, `_write()`, `_local_request()`, the
+charge-current slider and Apply, the window inputs/Apply/Clear, the timed-charging switch
+(now a status tag) and the whole write-lock JS machinery (`locked`/`applyLock`/`busy`,
+arm-to-confirm, click-time staleness re-checks). The owner is heading for a Home Assistant
+deployment and wants nothing network-reachable that can change inverter state; `control.py`
+on the CLI is the only way to write. The stale-sweep dimming, the out-of-order-poll guard
+and the future-timestamp distrust survive - they are about display truth, not write safety.
+The write-safety lessons (readback every write, arm-to-confirm on destructive controls,
+the lock having the last word after async work) live in git history before this date;
+re-read them before ever reintroducing a write path, and never reintroduce one unasked.
 
 **Overlapping polls must not roll the UI back.** `tick()` fires every 5 s without awaiting the
-previous fetch, and a write renders its own fresh state, so responses can land out of order. `render()`
-drops any sweep whose `read_at_epoch` is older than the last one rendered - without that, a request
-begun before an Apply could return after it and rebuild the slot rows from pre-write values, which
-then look live and invite a second Apply that undoes the first. A sweep timestamped in the *future*
-counts as stale too: it means the timestamp cannot be trusted either way.
-
-**The write lock is time-based, and time-based means it needs its own clock.** Every control that can
-start a write is disabled whenever the sweep is stale, errored, or the dashboard is unreachable
-(`applyLock()`), and `post()` refuses regardless of what the buttons look like. Three traps, all hit:
-`locked` starts **true** and `applyLock()` runs before the first `tick()`, because until a sweep lands
-nothing about the inverter is known and the page was previously fully writable in that gap; staleness
-used to be judged only inside `render()`, which runs only when a poll *returns*, so a hung fetch or a
-background tab whose timers the browser throttled left the last verdict standing on an hour-old
-reading - hence `watchdog()` on its own 2 s interval plus a re-check inside `post()` at click time;
-and `post()`'s `finally` restored the button states it snapshotted before the write, which by then
-could be stale, so `applyLock()` now has the last word. A failed write sets `locked` and records
-`UNKNOWN` in the last-write row, because a rejected fetch does not mean the registers were untouched.
-`busy` returns flash a banner rather than returning silently - an armed Clear swallowed that way looks
-exactly like a Clear that fired.
+previous fetch, so responses can land out of order. `render()` drops any sweep whose
+`read_at_epoch` is older than the last one rendered - an older sweep overwriting a newer one
+is a display lie. A sweep timestamped in the *future* counts as stale too: it means the
+timestamp cannot be trusted either way.
 
 **A future timestamp used to freeze the page permanently.** `lastEpoch` was updated before the
 freshness test, so one NTP step forward parked it an hour ahead; every later legitimate sweep was then
-dropped by the out-of-order guard and the page sat locked until the clock caught up. A sweep stamped
+dropped by the out-of-order guard until the clock caught up. A sweep stamped
 beyond `STALE_SECONDS` in the future is now distrusted *and* not recorded.
 
-**A window write is four registers, and failing partway is a real state.** `/api/write` re-reads and
-returns the state on the error path as well as the success path, and the browser renders it either
-way - otherwise a half-written window sits in the inverter while the page still shows the old
-complete one. The sweep is timestamped immediately after the register reads, before `_forecast()`,
-which can block on the network and would otherwise backdate itself onto fresh telemetry.
+**The sweep is timestamped immediately after the register reads**, before `_forecast()`, which
+can block on the network and would otherwise backdate itself onto fresh telemetry.
 
-**The charge-current row carries a slider and a live translation**, because the register value alone
-says nothing: 50 A reads as `50 A at 52.9 V is 2.6 kW - fills from 87% in about 15 min, inside the
+**The charge-current row is a read-only figure with a live translation**, because the register
+value alone says nothing: 50 A reads as `50 A at 52.9 V is 2.6 kW - fills from 87% in about 15 min, inside the
 6 h window`. It uses the live battery voltage and SOC, states facts and stops - it does
-not recommend a rate, which is the owner's call (see the charge-rate rule below).
+not recommend a rate, which is the owner's call (see the charge-rate rule below); changing it
+means `control.py charge-current N --apply` on the CLI.
 
 **Below the fill rate the row answers in percent, not in hours.** A rate too low to fill used to
 report the time it *would* take - "about 58 h, longer than the 6 h window" - which is true and
@@ -185,11 +177,7 @@ things - no sweep yet, and *slot 1 is unset* - so the unset case says "no charge
 this rate does nothing" instead of quoting a fill time for a rate that is not being applied, which
 contradicted the line directly above it. Both the window
 length and the times in the row's description are **read from slot 1**, not written as literals: the
-window has already been 04:30 and 03:30, and a hardcoded "23:30-05:30" would have been quietly wrong. An earlier attempt
-capped the row at 620px to close the label-to-input gap; that just left half the panel empty. The
-slider is what legitimately fills that width. `/api/write` re-imports `control.py`'s constants and guards
-rather than restating them, adds its own refusal for *any* discharge-window write, and re-reads after
-every write. Bound to `127.0.0.1` deliberately — it writes holding registers. HTML lives in the
+window has already been 04:30 and 03:30, and a hardcoded "23:30-05:30" would have been quietly wrong.  HTML lives in `dash.py`'s
 `PAGE` constant and is served with `render_template_string`, so there is no template directory to edit.
 
 ## Register map (verified live 2026-08-21)
@@ -294,7 +282,7 @@ which is what pins the x0.1 scaling.
 - **Don't confuse `43012`/`43013` (what the battery can do) with `43141`/`43142` (what is applied).**
 - **Network topology is mid-change (2026-08-21).** A FRITZ!Box serves `198.51.100.0/24`. Two Tenda Nova meshes hang off it, split by band — a fast main mesh, and a 2.4 GHz IoT mesh carrying the inverter. The IoT mesh *was* NATing `192.0.2.0/24` (gateway `192.0.2.1`, WAN side `198.51.100.49`), which made the inverter unreachable from the main mesh: `5.x` could reach `178.x` outbound, never the reverse. The owner is switching that mesh to **bridge mode**, after which everything is flat on `178.x` and the logger takes a new Fritz-issued address. Let `solis_net.py` find it; don't assume any address.
 - **Reaching the logger from the main mesh goes through a port forward**, added in the Tenda app 2026-08-21: `198.51.100.49:8899 → 192.0.2.45:8899` TCP. Verified carrying Modbus. Bridge mode was tried first and the Nova silently rolled back to Dynamic (twice), despite a valid wired uplink — don't burn time retrying it.
-- **The forward is LAN-only, not internet-facing.** Mesh B's WAN is the Fritz LAN. The FRITZ!Box 7530 AX (public IP as of 2026-08-21: `<wan-ip>`) has **zero** port mappings, so two NATs sit between the inverter and the internet.
+- **The forward is LAN-only, not internet-facing.** Mesh B's WAN is the Fritz LAN. The FRITZ!Box 7530 AX (public IP is dynamic - check the Fritz UI) has **zero** port mappings, so two NATs sit between the inverter and the internet.
 - **The forward has no DHCP reservation behind it.** The Tenda app wouldn't accept a MAC binding, so if the logger's lease moves off `192.0.2.45` the forward breaks silently — the symptom is `control.py` failing only from the main mesh while working from the IoT mesh. Fix by re-pointing the forward, or set a static IP on the logger itself.
 - **UPnP `AddPortMapping` does not work on this Tenda** (SOAP 500), almost certainly because it refuses mappings aimed at a device other than the requester. Reading mappings works; the app's own forwards do not show up in the UPnP list. Use the app.
 - **Discovery is intermittent.** The logger often ignores the `WIFIKIT` broadcast, especially with a Modbus session open. `solis_net.resolve_host()` falls through to its `CANDIDATES` list for this reason — don't "fix" discovery by removing the fallback.
@@ -302,8 +290,8 @@ which is what pins the x0.1 scaling.
   are exported from `~/.zshrc`, which a non-interactive shell does not source. Restarted without
   them, the dashboard hides the £ line and the car row *silently* (that gating is by design: no key
   configured means the rows are noise). Hit 2026-08-22: a restart from a tool shell "lost" the £
-  line and it read as a UI regression. Source the exports before relaunching.
-- **The logger allows one Modbus session at a time.** With `settings_dash.py` running, `control.py`
+  line and it read as a UI regression. Source the exports before relaunching. (In Docker the compose file carries them instead.)
+- **The logger allows one Modbus session at a time.** With the API/dashboard running, `control.py`
   dies with a bare `_queue.Empty` from pysolarmanv5 — that is contention, not a network fault. Read
   from `curl localhost:5051/api/state` instead, or stop the dashboard first.
 - **forecast.solar low-balls this array badly** and was dropped for Open-Meteo. Its free tier returns

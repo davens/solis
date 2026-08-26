@@ -74,8 +74,11 @@ LOW_KWH = 25.0
 UNCERTAINTY_KWH = 2.0
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ACTUALS_FILE = os.path.join(HERE, "solar_actuals.json")
-CACHE_FILE = os.path.join(HERE, ".solar_cache.json")
+# SOLIS_DATA_DIR moves the mutable files onto a volume when containerised
+# (solis_api.py keeps energy_cost.json there too); unset, they stay beside the code.
+DATA_DIR = os.environ.get("SOLIS_DATA_DIR") or HERE
+ACTUALS_FILE = os.path.join(DATA_DIR, "solar_actuals.json")
+CACHE_FILE = os.path.join(DATA_DIR, ".solar_cache.json")
 CACHE_SECONDS = 3600
 
 FORECAST_API = "https://api.open-meteo.com/v1/forecast"

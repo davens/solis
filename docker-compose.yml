@@ -1,0 +1,20 @@
+# Read-only Solis API, packaged for a box near Home Assistant.
+# First run: mkdir -p data && cp solar_actuals.json energy_cost.json data/
+services:
+  solis-api:
+    build: .
+    container_name: solis-api
+    restart: unless-stopped
+    environment:
+      # Logger discovery is a layer-2 UDP broadcast and cannot cross the
+      # Docker bridge, so name the host explicitly. From the main mesh the
+      # logger is reached through the Tenda port forward (see CLAUDE.md);
+      # from inside the IoT mesh use 192.0.2.45.
+      SOLIS_HOST: "198.51.100.49"
+      # Uncomment to enable the £ line and Car fields in /api/state:
+      # OCTOPUS_API_KEY: "..."
+      # OCTOPUS_ACCOUNT: "A-XXXXXXXX"
+    ports:
+      - "5051:5051"
+    volumes:
+      - ./data:/data
