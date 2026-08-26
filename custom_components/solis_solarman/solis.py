@@ -24,8 +24,10 @@ REG_PV_POWER = 33057          # u32 across 33057/33058, watts (DC side)
 REG_GRID_VOLTAGE = 33073      # x0.1 V
 REG_ENERGY_TODAY = 33035      # x0.1 kWh; 33036 is yesterday
 
-ENERGY_DAY_BASE = 33171
-ENERGY_DAY_COUNT = 10         # 33171..33180
+ENERGY_DAY_BASE = 33161
+ENERGY_DAY_COUNT = 20         # 33161..33180
+REG_BATT_CHARGE_TODAY = 33163    # x0.1 kWh; 33161/33162 are the u32 total
+REG_BATT_DISCHARGE_TODAY = 33167  # x0.1 kWh
 REG_GRID_IMPORT_TODAY = 33171  # x0.1 kWh
 REG_GRID_EXPORT_TODAY = 33175  # x0.1 kWh
 REG_HOUSE_TODAY = 33179        # x0.1 kWh
@@ -137,6 +139,8 @@ class SolisClient:
             "grid_power": -meter_power,
             "solar_today": round(energy[0] * 0.1, 1),
             "solar_yesterday": round(energy[1] * 0.1, 1),
+            "battery_charge_today": round(day[REG_BATT_CHARGE_TODAY - ENERGY_DAY_BASE] * 0.1, 1),
+            "battery_discharge_today": round(day[REG_BATT_DISCHARGE_TODAY - ENERGY_DAY_BASE] * 0.1, 1),
             "grid_import_today": round(day[REG_GRID_IMPORT_TODAY - ENERGY_DAY_BASE] * 0.1, 1),
             "grid_export_today": round(day[REG_GRID_EXPORT_TODAY - ENERGY_DAY_BASE] * 0.1, 1),
             "house_today": round(day[REG_HOUSE_TODAY - ENERGY_DAY_BASE] * 0.1, 1),

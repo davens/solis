@@ -83,6 +83,8 @@ SENSORS: tuple[SolisSensorDescription, ...] = (
     _energy("grid_import_today", "Grid import today"),
     _energy("grid_export_today", "Grid export today"),
     _energy("house_today", "House consumption today"),
+    _energy("battery_charge_today", "Battery charge today"),
+    _energy("battery_discharge_today", "Battery discharge today"),
     SolisSensorDescription(
         key="solar_yesterday", name="Solar yesterday",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,

@@ -13,7 +13,8 @@ Everything in this module is synchronous - call it via an executor job.
 import json
 import time
 import urllib.request
-from datetime import date, timedelta
+from datetime import date, datetime, time as dtime, timedelta
+from zoneinfo import ZoneInfo
 
 # Site .
 LAT, LON = REDACTED_LAT, REDACTED_LON
@@ -103,6 +104,38 @@ def _day_kwh(day, series):
         if total > 0:
             totals.append(total)
     return sum(totals) / len(totals) if totals else 0.0
+
+
+def _wh_hours(series):
+    """{tz-aware ISO hour: Wh} for today+tomorrow - the Energy dashboard's
+    native forecast line (energy platform contract: interval Wh, not W).
+
+    Same model as _day_kwh - per-hour mean across models that reported the
+    whole day, clipped at the inverter ceiling - so the hours sum to the
+    calibrated daily total. Peaks read ~20% low by construction (energy-fitted
+    EFFECTIVE_KWP); that is accepted for an energy-per-hour line.
+    """
+    tz = ZoneInfo("Europe/London")
+    out = {}
+    for offset in (0, 1):
+        day = date.today() + timedelta(days=offset)
+        columns = []
+        for days_map in series.values():
+            hours = days_map.get(day.isoformat()) or ()
+            if len(hours) != 24:
+                continue
+            kws = [min(watts * EFFECTIVE_KWP / 1000, INVERTER_W / 1000)
+                   for watts in hours]
+            if sum(kws) > 0:
+                columns.append(kws)
+        if not columns:
+            continue
+        for hour in range(24):
+            wh = round(sum(c[hour] for c in columns) / len(columns) * 1000)
+            if wh > 0:
+                stamp = datetime.combine(day, dtime(hour=hour), tzinfo=tz)
+                out[stamp.isoformat()] = wh
+    return out
 
 
 def _verdict(kwh):
@@ -213,4 +246,5 @@ def fetch_forecast():
         "tomorrow_summary": weather.get("summary"),
         "tomorrow_sunrise": weather.get("sunrise"),
         "tomorrow_sunset": weather.get("sunset"),
+        "wh_hours": _wh_hours(series),
     }
