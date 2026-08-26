@@ -1,10 +1,19 @@
-# Home Assistant "Energy" view (Overview dashboard, path /lovelace/energy).
-# Applied live via websocket lovelace/config/save on 2026-08-27; this file is the
-# record, not the source of truth - edit HA, then re-export.
+# Home Assistant "Energy" view - the lightning-bolt tab on the Overview
+# dashboard, /lovelace/energy. NOT the sidebar "Energy" entry, which is HA's
+# stock energy dashboard.
+#
+# Applied live over websocket lovelace/config/save; this file is the record,
+# not the source of truth - edit in HA, then re-export.
 #
 # HACS cards it needs: ReikanYsora/Helios, MindFreeze/ha-sankey-chart,
 # selvalt7/modern-circular-gauge, dbuezas/lovelace-plotly-graph-card, card-mod.
 # Every date-scoped card follows the single energy-date-selection card.
+#
+# Helios notes (2026-08-27): weather-enabled is OFF deliberately - an overcast
+# day paints a grey veil over the whole scene and flattens the 3D. Buildings
+# need a high building-opacity against a custom palette or the extrusions
+# vanish into the ground. camera-pitch-deg only wins when camera-locked is
+# true; unlocked, a stored pose in the browser's localStorage takes priority.
 title: Energy
 path: energy
 icon: mdi:lightning-bolt
@@ -15,10 +24,10 @@ sections:
   column_span: 4
   cards:
   - type: custom:helios-card
-    map-theme-mode: dark
+    map-theme-mode: custom
     auto-hide-ui: false
     auto-rotate-enabled: false
-    camera-pitch-deg: 50
+    camera-pitch-deg: 58
     show-timeline: true
     show-sun-times: true
     show-detail-panel: true
@@ -30,11 +39,25 @@ sections:
     max-expected-power: 6000
     battery-chip-mode: soc
     sun-chip-mode: irradiance
-    weather-enabled: true
+    weather-enabled: false
     weather-entity: weather.forecast_home_2
     grid_options:
       columns: full
       rows: 9
+    camera-bearing-deg: 205
+    display-radius: 250
+    building-count: 100
+    building-opacity: 0.92
+    shadow-opacity: 0.5
+    map-color-land: '#151a24'
+    map-color-water: '#16344f'
+    map-color-wood: '#1b2b1f'
+    map-color-grass: '#1f3324'
+    map-color-landuse: '#181d28'
+    map-color-building: '#4a5570'
+    map-color-roadMajor: '#5b6480'
+    map-color-roadMinor: '#394053'
+    map-color-roadCasing: '#0d1017'
 - type: grid
   column_span: 1
   cards:
