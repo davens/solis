@@ -24,6 +24,7 @@ from .entity import SolisEntity
 @dataclass(frozen=True, kw_only=True)
 class SolisSensorDescription(SensorEntityDescription):
     value_fn: Callable[[dict], object] | None = None
+    attr_fn: Callable[[dict], dict] | None = None
 
 
 def _power(key, name, **kwargs):
@@ -102,10 +103,37 @@ SENSORS: tuple[SolisSensorDescription, ...] = (
 )
 
 
+# Driven by the forecast coordinator, not the inverter poller. No device or
+# state class: these are forecasts, not measurements, and must stay out of
+# long-term statistics.
+FORECAST_SENSORS: tuple[SolisSensorDescription, ...] = (
+    SolisSensorDescription(
+        key="forecast_today", name="Solar forecast today",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        icon="mdi:white-balance-sunny"),
+    SolisSensorDescription(
+        key="forecast_tomorrow", name="Solar forecast tomorrow",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        icon="mdi:sun-clock",
+        attr_fn=lambda d: {
+            "summary": d.get("tomorrow_summary"),
+            "sunrise": d.get("tomorrow_sunrise"),
+            "sunset": d.get("tomorrow_sunset"),
+        }),
+    SolisSensorDescription(
+        key="verdict", name="Tomorrow verdict", icon="mdi:sun-compass",
+        attr_fn=lambda d: {"advice": d.get("advice")}),
+    SolisSensorDescription(
+        key="tomorrow_summary", name="Tomorrow weather",
+        icon="mdi:weather-partly-cloudy"),
+)
+
 async def async_setup_entry(hass, entry, async_add_entities):
-    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    data = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
-        SolisSensor(coordinator, entry, desc) for desc in SENSORS)
+        [SolisSensor(data["coordinator"], entry, desc) for desc in SENSORS]
+        + [SolisSensor(data["forecast_coordinator"], entry, desc)
+           for desc in FORECAST_SENSORS])
 
 
 class SolisSensor(SolisEntity, SensorEntity):
@@ -121,3 +149,10 @@ class SolisSensor(SolisEntity, SensorEntity):
         if self.entity_description.value_fn:
             return self.entity_description.value_fn(data)
         return data.get(self._key)
+
+    @property
+    def extra_state_attributes(self):
+        data = self.coordinator.data
+        if data is None or self.entity_description.attr_fn is None:
+            return None
+        return self.entity_description.attr_fn(data)

@@ -8,6 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import CONF_SERIAL, DEFAULT_PORT, DEFAULT_SCAN_INTERVAL, DOMAIN
+from .forecast import fetch_forecast
 from .solis import SolisClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -32,8 +33,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         update_method=_update)
     await coordinator.async_config_entry_first_refresh()
 
+    async def _update_forecast():
+        try:
+            return await hass.async_add_executor_job(fetch_forecast)
+        except Exception as exc:  # noqa: BLE001 - network errors of every shape
+            raise UpdateFailed(str(exc)) from exc
+
+    forecast_coordinator = DataUpdateCoordinator(
+        hass, _LOGGER, name=f"{DOMAIN}_forecast",
+        update_interval=timedelta(minutes=30),
+        update_method=_update_forecast)
+    # Plain refresh, not first_refresh: Open-Meteo being down must not take
+    # the inverter sensors down with it - the forecast just reads unavailable.
+    await forecast_coordinator.async_refresh()
+
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
-        "coordinator": coordinator, "client": client}
+        "coordinator": coordinator, "client": client,
+        "forecast_coordinator": forecast_coordinator}
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
