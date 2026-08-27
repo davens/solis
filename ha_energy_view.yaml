@@ -262,7 +262,7 @@ sections:
         color: '#9e9e9e'
         size: 11
       title:
-        text: House load — hour of day x last 21 days
+        text: House load — hour of day × last 21 days
         font:
           color: '#e0e0e0'
           size: 14
