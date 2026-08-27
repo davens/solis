@@ -207,6 +207,36 @@ solis_net.py resolves $SOLIS_HOST override → UDP discovery by serial → LAST_
 
 With HA, API, or dashboard holding the logger session, control.py may fail with _queue.Empty. Read curl localhost:5051/api/state where appropriate, or stop the reader before using the CLI.
 
+### The inverter clock, and the DST trap on 2026-10-25
+
+`43000`-`43005` is a plain real-time clock -- year, month, day, hour, minute,
+second, one per register. **It has no timezone and no DST awareness.** It holds
+whatever wall-clock was last written to it, and `control.py set-time` writes
+this machine's naive local time (`datetime.datetime.now()`), so today it holds
+BST.
+
+Right now that is correct. Verified 2026-08-27 from recorded history: the daily
+counters rolled over at **23:59:52 local (BST)** on 2026-08-26 -- solar_today
+went 30.9 -> 0.0 there, and grid import behaves the same. Note this is **one
+observed rollover**, not a pattern; the integration has only been recording
+since 2026-08-26.
+
+**BST ends on Sunday 2026-10-25.** Nothing adjusts the inverter, so from that
+morning its clock is **one hour fast** until someone runs
+`control.py set-time --apply`. Two consequences, and the second costs money:
+
+- The daily counters start rolling over at 23:00 GMT, so a "day" on the
+  inverter stops matching a day in HA, and every daily comparison silently
+  shifts by an hour.
+- **The charge window moves with the clock.** 43143 stores 23:30-05:30 in
+  *inverter* time, so an hour-fast clock runs it 22:30-04:30 GMT: the first
+  hour lands on the expensive day rate and the last cheap hour is missed
+  entirely. `control.py`'s own comment at `CLOCK_TOLERANCE_SECONDS` flags
+  exactly this - drift moves the whole window against the tariff.
+
+So: check `control.py show` on 2026-10-25 and set the clock if it has not been
+done. The same applies in reverse on the spring transition.
+
 ## Register map (verified live 2026-08-21)
 
 Input registers use FC 0x04 for telemetry; 43xxx holding registers use FC 0x03/0x06 for settings.
