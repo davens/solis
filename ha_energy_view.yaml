@@ -10,7 +10,84 @@
 #
 # HACS cards it needs: ReikanYsora/Helios, MindFreeze/ha-sankey-chart,
 # selvalt7/modern-circular-gauge, dbuezas/lovelace-plotly-graph-card, card-mod.
-# Every date-scoped card follows the single energy-date-selection card.
+# Card order is free: the Sankey was moved ABOVE the energy-date-selection card
+# on 2026-08-27 and kept its data, so date-scoped cards do not have to follow
+# it. (This file said they did until that was actually tried.)
+#
+# House-load split (2026-08-27): device_consumption carries Tesla and Air con,
+# so the Energy dashboard's untracked remainder IS rest-of-house (checked
+# 2026-08-26: derived 19.0 vs the inverter's own house_consumption_today 18.8).
+# The Sankey gained a 4th column splitting House, and "Rest of house" is a
+# remaining_parent_state node, so it needs no template sensor. The
+# energy-devices-detail-graph / energy-devices-graph cards were tried here and
+# REMOVED the same day - the owner wants the breakdown in the Sankey and
+# nowhere else. Both card types do render, if one is ever wanted again.
+#
+# THE SANKEY'S SOURCE-TO-SINK SPLIT IS NOT MEASURED. The inverter publishes
+# totals only - solar, import, battery in/out, export - and nothing that says
+# which source fed which sink. The card allocates each source across whatever
+# links it is given, IN THE ORDER THE LINKS ARE DECLARED. Verified 2026-08-27
+# by moving Solar -> Battery in ahead of Solar -> House: solar stopped feeding
+# the house first and started filling the battery. Two consequences. Order is
+# an editorial choice about which story to tell, not a fact to preserve. And a
+# link that is declared WILL be used, so a physically impossible one invents
+# flow - Battery out -> Grid export was doing exactly that, showing the battery
+# exporting on a house whose three discharge windows are all deliberately
+# unset. It was deleted; export now comes only from solar.
+#
+# HOW THE ALLOCATOR ACTUALLY WORKS (ha-sankey-chart 6.3.0, read from the
+# shipped bundle 2026-08-27 - there is no flow solver anywhere in it):
+#
+#     connection = min(source's unspent remainder, sink's unfilled remainder)
+#
+# walked per source node in NODE order, and within each source in LINK order.
+# sort_by only moves boxes afterwards; it cannot change the solve. Two failure
+# modes fall straight out of that, and both were live on this card:
+#
+#  1. A starved sink renders as a FLOATING BOX. _calcBoxes() draws a node from
+#     its own sensor state, but the renderer filters out connections whose
+#     state is 0. Solar was declared -> battery, -> house, -> export; house
+#     (22 kWh) ate every remaining solar kWh, so solar -> export computed to
+#     exactly 0 and Grid export sat there at 5.1 kWh with no ribbon reaching
+#     it. It was never disconnected - it was allocated nothing.
+#  2. remaining_parent_state IS NOT A BALANCE. Its state is
+#     inbound.reduce((a,c) => c.ready ? a + c.state : Infinity, 0) - the sum of
+#     what greedy failed to place upstream. That is why "Untracked / losses"
+#     read 3.4 kWh on a day whose real residual was 0.1.
+#
+# Link order is therefore set by PHYSICS, not by taste: export FIRST, because
+# solar is the only thing that can produce it (the battery cannot - discharge
+# windows unset - and net grid import->export is not a thing), then battery in,
+# then house as the elastic sink that absorbs the rest. Do not reorder these to
+# make a prettier picture without re-checking that no sink starves.
+#
+# The residual node is no longer remaining_parent_state. It is a plain entity
+# node with add_entities/subtract_entities, so it computes
+# solar + import + battery_out - house - battery_in - export arithmetically
+# instead of collecting greedy scraps; greedy then fills it via
+# min(parentRemaining, thatValue), which makes it self-limiting - it can never
+# display MORE than the true residual. Verified 2026-08-27 against the render:
+# 16.3 + 14.0 + 4.4 = 34.7 in, 22.3 + 5.6 + 6.7 + 0.1 = 34.7 out. It also
+# confirms add/subtract respect the Recorder `change` values that
+# energy_date_selection swaps in, which could not be predicted from the source.
+#
+# Still true after all that: the source-to-sink split remains PRESENTATION.
+# The ordering only makes the fabrication physically defensible. An honest
+# alternative exists - funnel every source into one "Supply total" node and
+# fan out from it, claiming no pairing at all - and was rejected because the
+# whole point of this chart is seeing solar go to the battery.
+#
+# The Tesla figure comes from sensor.tesla_home_charging_energy, a left-Riemann
+# integral (max_sub_interval 60s - TeslaMate publishes current ON CHANGE ONLY
+# and a 32 A plateau went 80 minutes with no update) over a template sensor
+# gating charger_voltage x charger_actual_current on a 180-280 V band. That is
+# AC-side, so it reads ~6% ABOVE what the Tesla app reports: the app measures
+# the pack, and the onboard charger's ~94%-efficiency losses are real house
+# load. The band excludes Superchargers; it cannot tell home from another AC
+# charger, which does not matter because the owner only charges at home.
+# Neither device had statistics before 2026-08-27 - no backfill is possible.
+# The LG sensor updates in HOURLY LUMPS (132 Wh flat for an hour, then a jump
+# to 200), so a flat hour is the cloud poll cadence, not the AC being off.
 #
 # Helios notes (2026-08-27): weather-enabled is OFF deliberately - an overcast
 # day paints a grey veil over the whole scene and flattens the 3D. Buildings
@@ -38,7 +115,7 @@ sections:
     power-unit: kW
     energy-unit: auto
     value-decimals: 1
-    max-expected-power: 6000
+    max-expected-power: 9000
     battery-chip-mode: soc
     sun-chip-mode: irradiance
     weather-enabled: false
@@ -61,6 +138,122 @@ sections:
     map-color-roadMinor: '#394053'
     map-color-roadCasing: '#0d1017'
     camera-locked: false
+- type: grid
+  column_span: 4
+  cards:
+  - type: custom:sankey-chart
+    title: Energy flow
+    energy_date_selection: true
+    ignore_missing_entities: true
+    layout: horizontal
+    height: 360
+    unit_prefix: k
+    round: 1
+    show_icons: false
+    show_names: true
+    show_states: true
+    show_units: true
+    min_box_size: 8
+    min_box_distance: 8
+    box_thickness: 18
+    connection_margin: 6
+    min_state: 0.01
+    throttle: 1000
+    sections:
+    - min_width: 170
+      sort_by: state
+      sort_dir: desc
+    - min_width: 150
+      sort_by: none
+    - min_width: 190
+      sort_by: state
+      sort_dir: desc
+      sort_group_by_parent: true
+    - min_width: 190
+      sort_by: state
+      sort_dir: desc
+      sort_group_by_parent: true
+    nodes:
+    - id: sensor.solis_inverter_solar_today
+      name: Solar
+      section: 0
+      color: var(--warning-color)
+    - id: sensor.solis_inverter_grid_import_today
+      name: Grid import
+      section: 0
+      color: var(--info-color)
+    - id: sensor.solis_inverter_battery_discharge_today
+      name: Battery out
+      section: 0
+      color: var(--success-color)
+    - id: sensor.solis_inverter_house_consumption_today
+      name: House
+      section: 1
+      color: var(--primary-color)
+    - id: sensor.solis_inverter_battery_charge_today
+      name: Battery in
+      section: 2
+      color: var(--success-color)
+    - id: sensor.solis_inverter_grid_export_today
+      name: Grid export
+      section: 2
+      color: var(--error-color)
+    - id: untracked_energy
+      name: Unaccounted
+      section: 2
+      color: var(--secondary-text-color)
+      entity_id: sensor.solis_inverter_solar_today
+      add_entities:
+      - sensor.solis_inverter_grid_import_today
+      - sensor.solis_inverter_battery_discharge_today
+      subtract_entities:
+      - sensor.solis_inverter_house_consumption_today
+      - sensor.solis_inverter_battery_charge_today
+      - sensor.solis_inverter_grid_export_today
+    - id: sensor.tesla_home_charging_energy
+      name: Tesla
+      section: 3
+      color: var(--info-color)
+    - id: sensor.living_room_air_conditioner_energy_today
+      name: Air con
+      section: 3
+      color: 'var(--cyan-color, #4dd0e1)'
+    - id: rest_of_house
+      type: remaining_parent_state
+      name: Rest of house
+      section: 3
+      color: var(--primary-color)
+    links:
+    - source: sensor.solis_inverter_solar_today
+      target: sensor.solis_inverter_grid_export_today
+    - source: sensor.solis_inverter_solar_today
+      target: sensor.solis_inverter_battery_charge_today
+    - source: sensor.solis_inverter_solar_today
+      target: sensor.solis_inverter_house_consumption_today
+    - source: sensor.solis_inverter_solar_today
+      target: untracked_energy
+    - source: sensor.solis_inverter_grid_import_today
+      target: sensor.solis_inverter_house_consumption_today
+    - source: sensor.solis_inverter_grid_import_today
+      target: sensor.solis_inverter_battery_charge_today
+    - source: sensor.solis_inverter_grid_import_today
+      target: untracked_energy
+    - source: sensor.solis_inverter_battery_discharge_today
+      target: sensor.solis_inverter_house_consumption_today
+    - source: sensor.solis_inverter_battery_discharge_today
+      target: untracked_energy
+    - source: sensor.solis_inverter_house_consumption_today
+      target: sensor.tesla_home_charging_energy
+    - source: sensor.solis_inverter_house_consumption_today
+      target: sensor.living_room_air_conditioner_energy_today
+    - source: sensor.solis_inverter_house_consumption_today
+      target: rest_of_house
+    card_mod:
+      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius: 16px;\n\
+        \  box-shadow: none;\n}\n"
+    grid_options:
+      columns: full
+      rows: 7
 - type: grid
   column_span: 1
   cards:
@@ -421,94 +614,6 @@ sections:
     grid_options:
       columns: full
       rows: 6
-- type: grid
-  column_span: 4
-  cards:
-  - type: custom:sankey-chart
-    title: Energy flow
-    energy_date_selection: true
-    ignore_missing_entities: true
-    layout: horizontal
-    height: 360
-    unit_prefix: k
-    round: 1
-    show_icons: false
-    show_names: true
-    show_states: true
-    show_units: true
-    min_box_size: 8
-    min_box_distance: 8
-    box_thickness: 18
-    connection_margin: 6
-    min_state: 0.01
-    throttle: 1000
-    sections:
-    - min_width: 170
-      sort_by: state
-      sort_dir: desc
-    - min_width: 150
-      sort_by: none
-    - min_width: 190
-      sort_by: state
-      sort_dir: desc
-      sort_group_by_parent: true
-    nodes:
-    - id: sensor.solis_inverter_solar_today
-      name: Solar
-      section: 0
-      color: var(--warning-color)
-    - id: sensor.solis_inverter_grid_import_today
-      name: Grid import
-      section: 0
-      color: var(--info-color)
-    - id: sensor.solis_inverter_battery_discharge_today
-      name: Battery out
-      section: 0
-      color: var(--success-color)
-    - id: sensor.solis_inverter_house_consumption_today
-      name: House
-      section: 1
-      color: var(--primary-color)
-    - id: sensor.solis_inverter_battery_charge_today
-      name: Battery in
-      section: 2
-      color: var(--success-color)
-    - id: sensor.solis_inverter_grid_export_today
-      name: Grid export
-      section: 2
-      color: var(--error-color)
-    - id: untracked_energy
-      type: remaining_parent_state
-      name: Untracked / losses
-      section: 2
-      color: var(--secondary-text-color)
-    links:
-    - source: sensor.solis_inverter_solar_today
-      target: sensor.solis_inverter_house_consumption_today
-    - source: sensor.solis_inverter_grid_import_today
-      target: sensor.solis_inverter_house_consumption_today
-    - source: sensor.solis_inverter_battery_discharge_today
-      target: sensor.solis_inverter_house_consumption_today
-    - source: sensor.solis_inverter_solar_today
-      target: sensor.solis_inverter_battery_charge_today
-    - source: sensor.solis_inverter_grid_import_today
-      target: sensor.solis_inverter_battery_charge_today
-    - source: sensor.solis_inverter_solar_today
-      target: sensor.solis_inverter_grid_export_today
-    - source: sensor.solis_inverter_battery_discharge_today
-      target: sensor.solis_inverter_grid_export_today
-    - source: sensor.solis_inverter_solar_today
-      target: untracked_energy
-    - source: sensor.solis_inverter_grid_import_today
-      target: untracked_energy
-    - source: sensor.solis_inverter_battery_discharge_today
-      target: untracked_energy
-    card_mod:
-      style: "ha-card {\n  background: #161616;\n  border: 1px solid rgba(255,255,255,0.06);\n  border-radius: 16px;\n\
-        \  box-shadow: none;\n}\n"
-    grid_options:
-      columns: full
-      rows: 7
 - type: grid
   column_span: 2
   cards:
