@@ -203,18 +203,6 @@ sections:
       name: Grid export
       section: 2
       color: var(--error-color)
-    - id: untracked_energy
-      name: Unaccounted
-      section: 2
-      color: var(--secondary-text-color)
-      entity_id: sensor.solis_inverter_solar_today
-      add_entities:
-      - sensor.solis_inverter_grid_import_today
-      - sensor.solis_inverter_battery_discharge_today
-      subtract_entities:
-      - sensor.solis_inverter_house_consumption_today
-      - sensor.solis_inverter_battery_charge_today
-      - sensor.solis_inverter_grid_export_today
     - id: sensor.tesla_home_charging_energy
       name: Tesla
       section: 3
@@ -235,18 +223,12 @@ sections:
       target: sensor.solis_inverter_battery_charge_today
     - source: sensor.solis_inverter_solar_today
       target: sensor.solis_inverter_house_consumption_today
-    - source: sensor.solis_inverter_solar_today
-      target: untracked_energy
     - source: sensor.solis_inverter_grid_import_today
       target: sensor.solis_inverter_house_consumption_today
     - source: sensor.solis_inverter_grid_import_today
       target: sensor.solis_inverter_battery_charge_today
-    - source: sensor.solis_inverter_grid_import_today
-      target: untracked_energy
     - source: sensor.solis_inverter_battery_discharge_today
       target: sensor.solis_inverter_house_consumption_today
-    - source: sensor.solis_inverter_battery_discharge_today
-      target: untracked_energy
     - source: sensor.solis_inverter_house_consumption_today
       target: sensor.tesla_home_charging_energy
     - source: sensor.solis_inverter_house_consumption_today
