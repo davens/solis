@@ -145,7 +145,6 @@ class SolisClient:
             "grid_export_today": round(day[REG_GRID_EXPORT_TODAY - ENERGY_DAY_BASE] * 0.1, 1),
             "house_today": round(day[REG_HOUSE_TODAY - ENERGY_DAY_BASE] * 0.1, 1),
             "house_yesterday": round(day[REG_HOUSE_YESTERDAY - ENERGY_DAY_BASE] * 0.1, 1),
-            "mode": mode,
             "mode_bits": [MODE_BITS.get(b, f"bit{b}") for b in range(16) if mode >> b & 1],
             "timed_charging": bool(mode >> 1 & 1),
             "charge_current": round(charge * 0.1, 1),

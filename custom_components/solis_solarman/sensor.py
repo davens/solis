@@ -90,6 +90,10 @@ SENSORS: tuple[SolisSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY),
     SolisSensorDescription(
+        key="house_yesterday", name="House yesterday",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY),
+    SolisSensorDescription(
         key="charge_current", name="Battery charge current limit",
         native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
         state_class=SensorStateClass.MEASUREMENT,
