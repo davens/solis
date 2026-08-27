@@ -16,7 +16,12 @@
 #
 # House-load split (2026-08-27): device_consumption carries Tesla and Air con,
 # so the Energy dashboard's untracked remainder IS rest-of-house (checked
-# 2026-08-26: derived 19.0 vs the inverter's own house_consumption_today 18.8).
+# 2026-08-26: derived 19.0 vs the inverter's own house_consumption_today 18.8 -
+# BUT THAT COMPARISON IS WRONG, found 2026-08-27: recorded history shows
+# house_consumption_today peaked at 17.7 on 2026-08-26 and never reached
+# 18.8, so the sides are 1.3 apart, not 0.2. The remainder is UNVALIDATED
+# until re-checked; sensor.solis_inverter_house_yesterday now makes that a
+# one-line comparison).
 # The Sankey gained a 4th column splitting House, and "Rest of house" is a
 # remaining_parent_state node, so it needs no template sensor. The
 # energy-devices-detail-graph / energy-devices-graph cards were tried here and
