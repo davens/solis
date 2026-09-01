@@ -1,0 +1,134 @@
+{
+ "captured_utc": "2026-08-30T15:10:06.829762+00:00",
+ "days": {
+  "2026-08-27": {
+   "battery_charge_today": {
+    "last": 0.0,
+    "max": 8.4,
+    "n": 92
+   },
+   "battery_discharge_today": {
+    "last": 0.0,
+    "max": 9.0,
+    "n": 101
+   },
+   "grid_export_today": {
+    "last": 0.0,
+    "max": 5.9,
+    "n": 69
+   },
+   "grid_import_today": {
+    "last": 0.0,
+    "max": 15.6,
+    "n": 165
+   },
+   "house_consumption_today": {
+    "last": 0.0,
+    "max": 29.1,
+    "n": 299
+   },
+   "solar_today": {
+    "last": 0.0,
+    "max": 19.0,
+    "n": 200
+   }
+  },
+  "2026-08-28": {
+   "battery_charge_today": {
+    "last": 0.0,
+    "max": 6.8,
+    "n": 82
+   },
+   "battery_discharge_today": {
+    "last": 0.0,
+    "max": 4.7,
+    "n": 60
+   },
+   "grid_export_today": {
+    "last": 0.0,
+    "max": 25.7,
+    "n": 270
+   },
+   "grid_import_today": {
+    "last": 0.0,
+    "max": 7.4,
+    "n": 88
+   },
+   "house_consumption_today": {
+    "last": 0.0,
+    "max": 13.1,
+    "n": 145
+   },
+   "solar_today": {
+    "last": 0.0,
+    "max": 33.7,
+    "n": 350
+   }
+  },
+  "2026-08-29": {
+   "battery_charge_today": {
+    "last": 0.0,
+    "max": 4.5,
+    "n": 56
+   },
+   "battery_discharge_today": {
+    "last": 0.0,
+    "max": 6.5,
+    "n": 76
+   },
+   "grid_export_today": {
+    "last": 0.0,
+    "max": 5.4,
+    "n": 65
+   },
+   "grid_import_today": {
+    "last": 0.0,
+    "max": 10.9,
+    "n": 120
+   },
+   "house_consumption_today": {
+    "last": 0.0,
+    "max": 20.0,
+    "n": 211
+   },
+   "solar_today": {
+    "last": 0.0,
+    "max": 12.8,
+    "n": 138
+   }
+  },
+  "2026-08-30": {
+   "battery_charge_today": {
+    "last": 5.8,
+    "max": 5.8,
+    "n": 65
+   },
+   "battery_discharge_today": {
+    "last": 2.8,
+    "max": 2.8,
+    "n": 34
+   },
+   "grid_export_today": {
+    "last": 12.1,
+    "max": 12.1,
+    "n": 128
+   },
+   "grid_import_today": {
+    "last": 28.7,
+    "max": 28.7,
+    "n": 293
+   },
+   "house_consumption_today": {
+    "last": 36.1,
+    "max": 36.1,
+    "n": 366
+   },
+   "solar_today": {
+    "last": 22.5,
+    "max": 22.5,
+    "n": 230
+   }
+  }
+ },
+ "source": "GET /api/history/period over each local day; 'max' is the end-of-day value of a total_increasing counter that resets at inverter local midnight (~23:59:52 BST)."
+}

@@ -71,9 +71,99 @@ Current Energy preferences:
 
 ha_energy_view.yaml records the live storage dashboard energy-live, promoted to the sidebar label “Energy”. HA's built-in Energy panel is hidden per user, but its configuration remains at /config/energy. Storage-dashboard URL paths require a hyphen. The YAML is **a record, not the source of truth**: edit in HA, then re-export. Required HACS cards are Helios, ha-sankey-chart, modern-circular-gauge, lovelace-plotly-graph-card, and card-mod.
 
-The view contains Helios, a four-column Sankey, HA's date/energy/gauge graphs, a battery SOC plot with charge windows shaded, a 21-day hour-of-day house-load heatmap, and the grid-voltage chart. Card order is free: moving the Sankey above energy-date-selection preserved date-scoped data.
+The view contains Helios, a three-column Sankey, HA's date/energy/gauge graphs, a battery SOC plot with charge windows shaded, a 21-day hour-of-day house-load heatmap, and the grid-voltage chart. Card order is free: moving the Sankey above energy-date-selection preserved date-scoped data.
 
-### Sankey: presentation, not measurement
+### Sankey node colours (2026-08-30)
+
+Colours carry meaning here and were chosen deliberately:
+
+| Node | Colour | Why |
+|---|---|---|
+| Grid import | `var(--error-color)` red | The most expensive flow on the chart. It previously shared `--info-color` with House, so the thing costing the most money read as house-coloured. |
+| Grid export | `#a78bfa` violet | It earns money; red was actively misleading. The violet matches the Power card's grid trace. |
+| Tesla | `#ffffff` white | The owner's car is white. It is not an accent from the palette, so do not "correct" it to one. |
+| House / Rest of house | `var(--primary-color)` | unchanged |
+| Air con | `#ff69b4` hot pink | Owner's choice. Yellow `#ffd60a` was tried first and rejected on sight: Solar's `--warning-color` resolves `rgb(255,166,0)` on this theme and the two blurred together. Do not retry a yellow or amber here. |
+| Solar / battery | warning (orange) / success | unchanged |
+
+**Promoting Tesla to a peer of House was built, reviewed and reverted on 2026-08-30 at the owner's
+request. Do not rebuild it unasked.** It worked: Tesla became a section-1 sink fed directly by the
+three sources, House carried `subtract_entities: [sensor.tesla_home_charging_energy]` to avoid
+double-counting, and the allocation resolved correctly -- solar 5.4 export / 4.5 battery in / 2.9
+house / 0 tesla, battery out 6.5 house / 0 tesla, grid import 5.32 **tesla** / 5.28 house, with
+House reading 14.7 instead of 20. The owner preferred the car back inside the house total. The two
+reusable findings from that work are kept below.
+
+**`subtract_entities` works on any plain `entity` node, including one with outgoing links.**
+Verified in the bundle at offset 62236: `r.state -= Math.min(i, r.state)`, clamped so it cannot go
+negative, and the card's own `autoconfig` uses it on nodes that have children. So a
+subtract-then-split node is a supported shape if it is ever wanted again.
+
+**Read the allocation from `base.__connections`, not from the picture.** The
+`SANKEY-CHART-BASE` element inside the card's shadow root exposes every resolved
+`{parent, child, state}`. That is the only reliable way to check a reordering, because a
+zero-valued connection is invisible on screen and looks identical to a link that was never
+declared.
+
+### Sankey v2, deployed 2026-08-30: the split IS measured now
+
+**Everything in the next section describes v1 and is superseded as a description
+of the live chart, but is still true about the card and must be read before
+touching the layout.** v1's allocation was greedy and editorially ordered; v2
+measures each source->sink flow and hands the card the number.
+
+The graph is **two columns, 8 nodes, 12 links**: Solar / Battery out / Grid
+import feed House, Tesla, Battery in, Grid export and Inverter, and every sink
+is a terminus. Each link carries `value: sensor.flow_<source>_to_<sink>_daily`,
+which the card applies as `min(parent_remainder, child_remainder, value)`, so
+declaration order no longer decides the picture. House, Tesla and Inverter have
+no counter of their own: each is `entity_id` plus `add_entities` over its three
+inbound meters. Inverter is DC/AC conversion loss and parasitic draw, ~2.5
+kWh/day, grey `#6b7280`.
+
+**The Inverter node was validated against physics on 2026-08-31 and is correct.**
+On a pure grid-charging night it read 0.580 kWh two hours in; integrating the raw
+5-minute power statistics over the same window gives a residual of
+5.443 - 4.348 - 0.503 = 0.592 kWh, 2% away. The check that matters is that the
+power path reproduces the independently measured 0.887 charge efficiency
+(4.348 / (5.443 - 0.503) = 88.0%). **Do not "validate" this node against
+`house_consumption_today`.** That counter is a derived residual that already
+contains the conversion loss, so the comparison makes the node look like ~0.5 kWh
+of double-counted house load when it is not -- see "What the daily counters do and
+do not prove". Two independent auditors both stalled on exactly that trap.
+
+Source of truth is `sankey_tests/layout_v2.py`; the deploy script is
+`scratchpad/sankey_v2_apply.py` (dry run by default, backups in
+`energy_live_pre_v2.json`), and `sankey_v2_restore.py --apply` puts v1 back.
+`sankey_tests/BRIEF_V2.md` carries the design and the reasons.
+
+**Three nodes were removed on 2026-08-30 at the owner's request; do not re-add
+any of them unasked.** "Stored" (a `remaining_parent_state` child of Battery in)
+restated Battery in's own number one column right. "Air con" and "Rest of house"
+went with the whole third column: dropping House's device split is what makes
+every sink a terminus, so Tesla lines up with the rest. The air-con entity is
+untouched in HA -- it is simply not on this chart. Feeding a section-2 Tesla
+from a section-1 House was the alternative and was rejected, because it puts the
+car back inside the house total and loses the per-source colouring that is the
+node's entire point.
+
+**The link `value:` entities are read as `sum(change)` from statistics, NOT
+live.** They go into the same `entityIds` array as the nodes (char 100603) and
+their state is overwritten by the statistics result (96959). A `value:` target
+with no statistics rows returns **null**, so `Number("null")` is NaN, that NaN
+lands in the source's `parent_spent`, and **every later ribbon from that source
+silently goes to zero**. The load-bearing property is `state_class`, not
+availability -- an `unavailable` entity is still present in `hass.states` and
+still gets substituted. `sankey_v2_apply.py`'s guard 6 checks this and must stay.
+
+**A chart applied mid-day looks broken and is not.** The flow meters are daily
+`utility_meter` helpers created at 17:00 on 2026-08-30, while Solar / Battery /
+Grid / Export boxes read the inverter's own full-day counters. Until both sides
+have covered the same window the source bars are full height and the ribbons are
+hairlines. Both reset at midnight, after which they measure the same day and the
+proportions are honest. Do not "fix" this by rescaling anything.
+
+### Sankey: presentation, not measurement (v1 -- superseded 2026-08-30)
 
 **The source-to-sink split is not measured.** The inverter provides totals—solar, import, battery in/out, export, house—not which source fed which sink. ha-sankey-chart 6.3.0 has no flow solver. It walks source nodes in node order and links in declaration order, allocating:
 
@@ -87,6 +177,41 @@ This produced two deceptive but plausible failures:
 - remaining_parent_state is not an arithmetic balance; it sums greedy upstream leftovers. It showed 3.4 kWh “Untracked / losses” when the real residual was 0.1.
 
 Link order is therefore constrained by physics: **solar → export first, then battery in, then house as the elastic sink**. The battery-to-grid link was removed because all discharge windows are unset; merely declaring it fabricated battery export. Do not reorder for appearance without checking that no constrained sink starves.
+
+**Node order is allocation priority, and the most physically constrained source must come first.**
+Verified 2026-08-28 from the bundle: `_calcConnections()` iterates `this.connections` in plain
+push order, and connections are pushed by walking sections → the `nodes` array → each node's
+links in `links` order. `sort_by` only repaints afterwards (`boxes:Ue(c,a.boxes,l,d)`).
+
+`battery_discharge → house` is that source's **only** possible link, because all three discharge
+windows are unset. It was declared after `grid_import`, so grid import filled House first and the
+battery-out connection resolved to **zero**: Battery out rendered as a stranded box with no ribbon
+at all, while House falsely showed grid covering the whole load. Live numbers at the time -- solar
+2.7, grid import 5.4, battery out 1.2, house 4.2, battery in 4.8, export 0.5 -- gave battery out
+1.20 of 1.20 stranded and battery in 1.40 of 4.80 unfed. Node order is now solar, battery out,
+grid import. **Do not** also move `solar → house` ahead of `solar → battery in`; codex proposed it
+to force a prettier House split, but it directly contradicts the chart's purpose of seeing solar
+reach the battery.
+
+**A link spanning more than one section makes the card invent an unlabelled ghost box, coloured
+like its target.** This is what made the battery appear to charge itself. In the four-section
+layout, `solar/grid → battery_charge` jumped section 0 → 2, so the card synthesised a box in
+section 1:
+
+    if(h-d<=1)continue; ... const s=t(l,["id","section","type"]);
+    e.push({...s, id:`${u}__passthrough_${i}__auto`, section:i, type:"passthrough"})
+
+It clones the **target's** props including `color`, draws at `fill-opacity:.4`, and suppresses the
+name and state (`if("passthrough"===t.config.type||!r&&!a)return null`). Battery in is green, so an
+unlabelled green box appeared next to the stranded green Battery-out box and the eye joined them.
+The same day, export going above zero produced a matching unlabelled **red** box, Grid export being
+`--error-color` -- that pair is the giveaway. Passthroughs do not change the arithmetic: the real
+parent/child are preserved (`r={parent:e,child:o,...,passthroughs:n}`).
+
+Fixed 2026-08-28 by collapsing four sections to three -- Battery in and Grid export now sit in
+House's section -- so every link is exactly one hop and the machinery never fires. `sankey_fix.py`
+aborts if any link spans other than one section; keep that guard if the layout is ever revisited.
+
 
 **The “Unaccounted” node was removed on 2026-08-27 at the owner's request** -- it was not telling anyone anything useful. Do not re-add it unasked. Before removal it was a plain entity node computing solar + import + battery_out − house − battery_in − export via add_entities/subtract_entities, which kept it honest (greedy allocation can never display more than the real residual); it verified against 16.3 + 14.0 + 4.4 = 34.7 kWh in and 22.3 + 5.6 + 6.7 + 0.1 = 34.7 out, and proved that add/subtract use Recorder `change` values under energy_date_selection. That last fact is the reusable one. Removing it leaves the three source nodes with a small unspent remainder, which the card simply renders as a slightly shorter bar -- it is not an error, and it is not a link to invent a target for.
 
@@ -125,7 +250,54 @@ five-minute table at 16:05 -- the card simply never asks for it. Rounding is
 `unit_prefix: k` with `round: 1`, so 389 Wh is 0.4 and 130 Wh is 0.1.
 
 **Do not "fix" the lag by turning off `energy_date_selection`.** It is card-wide: every node would
-revert to raw live state and any historical date would show today's numbers. The lag is accepted.
+revert to raw live state and any historical date would show today's numbers.
+
+### The 5-minute patch to ha-sankey-chart, and re-applying it
+
+**The recorder is not the bottleneck and never was.** Verified 2026-08-28: HA already writes
+5-minute short-term statistics, and they are current. Queried together at 09:56, grid export gave
+23 rows at `period: 5minute` ending 09:50 `state=3.1`, against a single row at `period: hour`
+ending 08:00 `state=0.5` -- five minutes behind versus two hours. There is nothing to change in
+`recorder:`, and **1-minute is not available at all**: HA core hard-codes short-term statistics at
+5 minutes, and no recorder option changes it. The inverter's own 10 s poll is likewise already in
+the states table.
+
+The loss is entirely in the card. `ha-sankey-chart.js` contains the string `5minute` **zero** times
+and picks its period from range length alone:
+
+    const bi=(t,e)=>{const i=Se(e||new Date,t);return i>35?"month":i>2?"day":"hour"}
+
+`bi` is called as `bi(start, end)` from both fetch paths, so patching this one arrow function
+covers the whole card. `Se(t,e)` is date-fns signed day difference `t - e`
+(`function Se(t,e){oe(2,arguments);var i=ae(t),n=ae(e),s=Ee(i,n),...}`), so inside `bi` the value
+`i` is the range length, and `Se(new Date, e||new Date)` is the **age of the selection**. Patched
+form:
+
+    const bi=(t,e)=>{const i=Se(e||new Date,t);return i>35?"month":i>2?"day":Se(new Date,e||new Date)<=7?"5minute":"hour"}
+
+**The `<=7` guard is mandatory, not caution.** 5-minute statistics are purged along with
+`purge_keep_days` (default 10). An unconditional swap to `5minute` would make any older date render
+**empty**, which is a far worse failure than the lag it fixes. Seven days leaves margin.
+
+File: `/config/www/community/ha-sankey-chart/ha-sankey-chart.js`.
+
+**HACS overwrites this file on every card update and the patch is silently lost.** Nothing errors;
+the chart just quietly goes back to being up to an hour behind. So:
+
+- After any HACS update of ha-sankey-chart, **re-apply the patch**. Treat a card update and a
+  repatch as one operation.
+- Detect the state with `grep -c 5minute ha-sankey-chart.js`: **1 means patched, 0 means reverted**.
+- **Apply by pattern match, never by line number or identifier.** `bi`, `Se` and `xi` are minified
+  names that change on every upstream rebuild. Re-locate the arrow function by its
+  `i>35?"month":i>2?"day":` body, and re-confirm `Se`'s argument order before trusting the guard --
+  an inverted guard silently breaks historical dates rather than erroring.
+- Verify after patching by selecting today (should track within ~5 min) and a date older than a
+  week (must still render, via the `hour` fallback).
+
+Status 2026-08-28: **not yet applied.** There is no write path to `/config` from the dev machine --
+no ssh, samba, `shell_command`, `command_line` or `python_script` components, and the Supervisor
+API returns 401 to a long-lived token. Ports 22 and 22222 are closed. Applying it needs the
+Terminal & SSH add-on (or File editor) installed first.
 
 ### Helios and grid-voltage chart
 
@@ -139,7 +311,69 @@ Helios home-latitude/home-longitude move only the building highlight, not ring, 
 
 The 24-hour grid-voltage plot shows raw sensor.solis_inverter_grid_voltage plus hourly min/max as a translucent band. It fixes the y-axis near 212-257 V and marks UK supply limits, 230 V +10% / -6% = **253.0/216.2 V**, because the question is upper-limit headroom and autoranging hides it. This is a live healthy-grid view, not a revival of the retired logger. Its statistics band begins only when the integration's own long-term statistics begin.
 
+**Export power was added as a second trace on 2026-08-30** so voltage peaks can be traced to their cause, and on the first day it plotted the correlation was unmistakable: flat ~240 V overnight at zero export, rising to 248-253 V from the moment export starts at about 09:20. Three things about it are load-bearing. It is derived as `max(0, -v)/1000` from `sensor.solis_inverter_grid_power`, which is **positive importing** -- plotting that series raw would draw import and call it export. It sits on a second y-axis fixed at **0-8 kW**, not autoranged: an autoranged axis rescales per window, so a calm day and a clipping day would look identical and the chart would stop answering the question. And it is declared FIRST in `entities` so plotly draws it beneath the voltage lines; the band's `fill: tonexty` is unaffected because it fills to the trace immediately before it, which is still Hourly max. The violet matches Grid export on the Sankey. Script: `scratchpad/voltage_export_apply.py`, backup `grid_voltage_pre_export.json`.
+
 With raw_plotly_config: true the card does not map data automatically. Every trace needs explicit x: $ex xs and y: $ex ys; without them the axes and shapes render but no data does, often with a plausible-looking -1..6 numeric x-axis and no console error.
+
+### mini-graph-card on the Overview dashboard
+
+The two climate cards fold their state row up into the title row via card_mod, taking
+each card from 195 px to 125 px. The saving is real: mini-graph-card's `.states` row
+costs 56 px (40 px of 33.6 px type plus 16 px padding) purely to restate two numbers
+that fit beside the title. `ha-card` is a column flex, so the mod turns it into a
+wrapping row -- header and states share line one, `.graph` takes line two at
+`flex: 1 0 100%`.
+
+**`.header` must be the elastic side and `.states` the rigid one.** This is not a
+preference; the reverse renders differently per engine. `.header` is a *nested* flex
+container, so `flex: 0 0 auto` on it makes the layout depend on an auto basis
+resolving to content width: Blink resolves toward max-content and looks correct,
+WebKit resolves toward min-content, collapsing the title's `overflow: hidden` span so
+it ellipsises while `.states` absorbs the slack. Verified 2026-08-29 -- fine in Chrome,
+truncated in the iPad companion app at the same card width. So `.states` carries
+`flex: 0 0 auto` with `white-space: nowrap` (short, predictable digits) and `.header`
+takes the leftover with `min-width: 0`. `.name`, `.icon` and `.state` all carry
+explicit `flex` for the same reason. **Test any change to this card in the iPad app,
+not only in Chrome.**
+
+Two smaller points established the same day: `.state` needs `align-items: baseline`
+or the unit floats about 5 px above the digits' baseline, and the readings need a
+wider gap between them (22 px) than between a value and its unit, or the pair reads
+as one blob.
+
+**The Power card already carries its own unrelated card_mod** -- a four-column grid
+for its four states and the legend. It is deliberately excluded from the fold, because
+four states plus a legend wrap into a stack and make the card *taller*. A script that
+assigns `card["card_mod"]` across every `custom:mini-graph-card` destroys it; that
+happened on 2026-08-29 and had to be restored from a backup. Match on card name, and
+back the dashboard config up before writing it.
+
+### The Overview Car tile and what "stale" means
+
+This is the `custom:button-card` at view 0 / section 1 / card 3, keyed on
+`sensor.tesla_battery`. It is a different artefact from the Car tile in `dash.py`.
+
+**`sensor.tesla_state` = `offline` is a sleeping car, not a fault.** Measured over the
+seven days to 2026-08-29: offline **73.4%**, online 14.9%, suspended 5.2%, driving
+3.7%, charging 2.9% -- while `binary_sensor.teslamate_healthy` was `on` for 98.9% of
+the same window. Tesla lets the car stop answering the API to avoid vampire drain, and
+TeslaMate reports that as offline. The tile used to list `offline` alongside `unknown`
+and `unavailable`, so for roughly three-quarters of every week it showed a red
+"No link - data stale", a 55%-white hero number, a half-opacity bar and 45%-opacity
+info rows, for a car that was fine.
+
+**There is no age caveat to add, either.** The car pushes a full update whenever it
+wakes, so the displayed SOC, range and temperature are always the last *true*
+readings rather than a decaying guess. A time-since-update heuristic would fire
+constantly during normal overnight sleep and would be wrong every time. Do not add
+one.
+
+So `offline`/`asleep`/`suspended` are one `resting` state, shown at full brightness as
+"Asleep" (or "Plugged in - Asleep"), and `stale` now means only that the link to
+TeslaMate is genuinely broken: `teslamate_healthy` off, `sensor.tesla_state`
+unknown/unavailable, or no SOC to display. That is the only honest signal available --
+`teslamate_healthy` is TeslaMate's own healthcheck, and nothing else distinguishes
+"asleep" from "broken".
 
 ## Docker JSON API and browser dashboard
 
@@ -295,13 +529,46 @@ hour off -- the register resets at about 23:59:53 BST. This is **unproven**: shi
 the same hour does not reproduce cloud's consumption (19.0 against 17.8) or battery charge (4.2
 against 5). Do not adjust a register reading to agree with the cloud figure.
 
-**A roughly 0.9 kWh gap between integrated house-load power and the house-consumption counter is
-expected.** Overnight 2026-08-27: 11.23 kWh from integrating 33147 against 12.1 kWh of statistics on
-the counter, 7.8% apart. This was checked and is **not** a Riemann-method or sampling artifact --
-left, right, and trapezoid rules span only 0.012 kWh, and the largest sample gap was 92.8 s at about
-250 W. It is **inferred** to be two different inverter measurement paths: an instantaneous wattage at
-33147 versus an energy counter at 33177-33180. Left unattributed. Do not adjust either side to make
-them agree.
+**The house-consumption counter 33177-33180 is a derived residual, and it silently contains the
+inverter's conversion loss. Never compare it against integrated house-load power, and never treat
+it as an independent measurement in an energy balance.** Established 2026-08-31; this supersedes the
+earlier note that the gap was "two different measurement paths, left unattributed".
+
+Across five consecutive days the counter equals `solar + import + discharge - export - charge` to
+within +0.1 to +0.4 kWh, always signed the same way:
+
+| date | house counter | S+I+D-E-C | diff |
+|---|---|---|---|
+| 2026-08-26 | 29.1 | 29.50 | +0.40 |
+| 2026-08-27 | 13.1 | 13.30 | +0.20 |
+| 2026-08-28 | 20.0 | 20.30 | +0.30 |
+| 2026-08-29 | 46.0 | 46.10 | +0.10 |
+| 2026-08-30 | 1.0 | 1.10 | +0.10 |
+
+Because it is a residual it absorbs everything the other five counters do not account for, which is
+overwhelmingly DC/AC conversion loss and inverter housekeeping. That is the whole of the roughly
+0.9 kWh/day gap previously recorded here as unexplained (overnight 2026-08-27: 11.23 kWh integrating
+33147 against 12.1 kWh on the counter). The earlier finding that it is **not** a Riemann-method or
+sampling artifact still stands and is what forced this explanation -- left, right, and trapezoid
+rules span only 0.012 kWh, and the largest sample gap was 92.8 s at about 250 W. **33147 is the
+honest house number; 33179 is house plus loss.**
+
+Two consequences that will otherwise mislead:
+
+- **An energy balance built from the six daily counters closes by construction and proves nothing.**
+  It cannot detect a conversion loss, because the loss is already inside the house term. The
+  closed balance recorded further up this file identifies what the counters *are*; it is not
+  evidence that they are independent.
+- **The counters imply impossible efficiency if read literally.** On the 2026-08-31 grid-charging
+  night, 5.4 kWh imported against 4.4 kWh DC stored and 1.0 kWh house leaves zero loss; taken the
+  other way, storing 4.4 kWh DC at the measured 0.887 needs 4.96 kWh AC, which with a 1.0 kWh house
+  overspends the 5.4 kWh import by 0.56 kWh.
+
+The power sensors do not share the fault. Integrating 5-minute statistics over 23:00-01:05 UTC that
+night gave grid 5.443 kWh against a 5.4 counter and battery 4.348 against 4.4 -- both agree -- while
+house load integrated to **0.503 kWh against a 1.0 counter**. Only the house pair disagrees, and the
+power path reproduces the independently measured charge efficiency: 4.348 / (5.443 - 0.503) =
+**88.0%**, against ETA_CHARGE 0.887.
 
 ## Battery and tariff operating policy
 
@@ -372,6 +639,32 @@ The retained topology record is internally historical because a bridge migration
 - Tenda UPnP AddPortMapping returns SOAP 500, likely because the target is not the requester. Reading mappings works, but app-created forwards do not appear there. Use the app.
 
 The native HA integration stores the configured host directly, so a DHCP/forward change requires updating/recreating its config entry; it has no solis_net fallback. The Docker compose host is deliberately the forwarded 198.51.100.49 in the recorded configuration.
+
+### Remote access: Tailscale, HA box only
+
+Installed 2026-08-29: the Community Add-ons Tailscale app, `a0d7b954_tailscale` v0.29.0,
+running with boot `auto`. The node is `homeassistant` on tailnet `<tailnet>.ts.net` at
+**<tailnet-ip>**, authenticated as <email>. Remote URL is
+`http://homeassistant.<tailnet>.ts.net:8123`. **Key expiry is disabled** for this device --
+it must stay disabled, because the failure mode is the node silently dropping off the tailnet
+months later with no error anywhere.
+
+**`advertise_routes` is empty on purpose. Do not add subnet routes.** The owner's instruction
+on 2026-08-29 was "i only need the ha box, for security". Advertising 198.51.100.0/24 would
+put the inverter's forwarded Modbus port 198.51.100.49:8899 within reach of every tailnet
+device; that is exactly what is being declined. This does not need re-proposing.
+
+None of this creates a write path to the inverter: Tailscale reaches HA, and HA is read-only.
+
+**Add-ons are called "Apps" in this HA build and live under `/config/apps`, not `/hassio/`.**
+An add-on's page is `/config/app/<slug>/info` and its ingress UI is `/app/<slug>`;
+`/hassio/addon/<slug>/info` returns a bare `404: Not Found`, and `get_panels` confirms there is
+no `hassio` panel registered. The Supervisor REST proxy at `/api/hassio/...` still returns 401
+to a long-lived token, but the **websocket** command
+`{"type": "supervisor/api", "endpoint": "/addons", "method": "get"}` works and is how the
+add-on install, start, and info reads above were done. It only handles JSON responses, so
+`/addons/<slug>/logs` fails with a bare `unknown_error`; read an add-on's own API through
+ingress instead, using a session from `POST /ingress/session`.
 
 ## Historical dead ends
 

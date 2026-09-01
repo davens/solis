@@ -4,5 +4,11 @@ __pycache__/
 .solar_cache.json
 .claude/settings.local.json
 
+# test / coverage artefacts
+.coverage
+*.profraw
+.pytest_cache/
+.hypothesis/
+
 # dashboard dumps written by car_tile/apply_tile.py (kept local, like the other dashboard backups)
 car_tile/backups/
