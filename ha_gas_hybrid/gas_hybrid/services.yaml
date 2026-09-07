@@ -1,0 +1,14 @@
+merge:
+  name: Rebuild gas statistics
+  description: >-
+    Rebuild gas_hybrid:consumption_kwh and gas_hybrid:cost_gbp from the Octopus legacy
+    statistics where a day is covered, and the Home Mini meter where it is not.
+  fields:
+    full:
+      name: Full rebuild
+      description: >-
+        Rebuild the entire history from the earliest legacy statistic rather than only the
+        recent window.
+      default: false
+      selector:
+        boolean:

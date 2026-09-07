@@ -66,12 +66,68 @@ Current Energy preferences:
 - Grid import/export use the Solis daily counters. Import is priced by the Octopus current-rate entity; export is a flat £0.12/kWh.
 - Solar uses the Solis daily counter plus the solis_solarman forecast provider.
 - Battery uses the integration's charge/discharge daily counters. battery_power needs stat_rate_inverted because HA expects positive discharge while this integration uses positive charge.
-- Gas stays on Octopus external statistics, which are backdated hourly onto the correct day.
+- Gas uses `gas_hybrid:consumption_kwh` and `gas_hybrid:cost_gbp`, **not** the Octopus external statistics directly. See "Gas: the hybrid statistic" below.
 - Consumption cost is calculated per 10-second energy delta against the rate at that instant, giving near-exact peak/off-peak attribution. It excludes the standing charge.
 
 ha_energy_view.yaml records the live storage dashboard energy-live, promoted to the sidebar label “Energy”. HA's built-in Energy panel is hidden per user, but its configuration remains at /config/energy. Storage-dashboard URL paths require a hyphen. The YAML is **a record, not the source of truth**: edit in HA, then re-export. Required HACS cards are Helios, ha-sankey-chart, modern-circular-gauge, lovelace-plotly-graph-card, and card-mod.
 
 The view contains Helios, a three-column Sankey, HA's date/energy/gauge graphs, a battery SOC plot with charge windows shaded, a 21-day hour-of-day house-load heatmap, and the grid-voltage chart. Card order is free: moving the Sankey above energy-date-selection preserved date-scoped data.
+
+### Gas: the hybrid statistic (2026-09-07)
+
+The Octopus Home Mini was enabled in the account entry on 2026-09-07 (`supports_live_consumption`,
+both refresh rates set to **5 minutes**). The Octopus API caps at 100 calls/hour and the gas meter
+itself only reports half-hourly, so 5 costs nothing in resolution and leaves headroom; do not drop
+it to 1 without a reason. The account entry has **no options flow** -- `supports_options` is false
+and `supports_reconfigure` true, so this is changed by a **reconfigure** flow
+(`POST /api/config/config_entries/flow` with `entry_id`), which prefills every current value.
+
+Two gas sources now exist and neither alone is good enough:
+
+- `octopus_energy:gas_..._previous_accumulative_consumption_kwh` (and `..._cost`) -- the **billed**
+  half-hourly meter data, published as correctly-dated hourly external statistics. A day lands about
+  **18-42 h late**: 2026-09-06's arrived 2026-09-07 at 18:21. The identically-named *entity* is the
+  day-shifted one; the external statistic is the correct-by-day one.
+- `sensor.octopus_energy_gas_..._current_total_consumption_kwh` -- the Mini's **lifetime** meter
+  total, within minutes. Use this one, not `current_accumulative_consumption_kwh`: the accumulative
+  sensor resets at midnight, and a `total` sensor resetting without `last_reset` is a statistics
+  hazard. The lifetime total is `total_increasing` and needs no special handling.
+
+`custom_components/gas_hybrid` (source of truth `ha_gas_hybrid/gas_hybrid/` in this repo) merges
+them into `gas_hybrid:consumption_kwh` and `gas_hybrid:cost_gbp`, which is what the Energy dashboard
+reads. Every 30 minutes it rebuilds a rolling 8-day window hour by hour: **any finished local day
+the legacy series has published owns that day; every other day comes from the Mini.** Re-importing
+an hour overwrites it, so a day estimated from the Mini is silently replaced by the billed figures
+when they land. Service `gas_hybrid.merge` runs it on demand; `{"full": true}` rebuilds the entire
+history from the earliest legacy row. Both inputs and the target are discovered by pattern, so a
+meter or MPRN change needs no edit.
+
+Four things about it are load-bearing:
+
+- **Presence, not count, decides a legacy day.** Octopus publishes only the half-hours the meter
+  reported: 2026-01-02 has three hours and no more will ever arrive. An earlier "at least 20 rows =
+  complete" rule zeroed 26 such hours. Verified after the fix: **13583 of 13583 legacy hours
+  reproduced exactly.**
+- **The legacy series re-bases its cumulative sum, and negative changes are clamped to zero.** It
+  has done so five times -- 2025-05-17, 2025-11-24, 2025-12-22, 2026-04-07, 2026-08-05 -- the worst
+  reading **-20220.65 kWh** in a single hour. Summing its raw hourly `change` over the whole history
+  gives 169.2 kWh instead of the real 31836. Gas cannot be un-burnt, so the clamp is right, and it
+  makes the hybrid strictly better than its source. Those five hours are the *only* places the
+  hybrid deliberately differs from legacy.
+- **`async_add_external_statistics` queues a recorder job; it does not write synchronously.** Two
+  separate "the fix didn't work" false alarms here were just reads racing the queue -- a full
+  rebuild is ~24000 rows per series and the cost series is queued behind the consumption one. Give
+  it a minute before verifying, and re-read before concluding anything.
+- Cost matches the billed convention: it **includes the standing charge**, added once at local
+  midnight on live days. Verified both ways -- 7.978 kWh x 0.078367 + 0.284949 = 0.910 against a
+  billed 0.91, and 0.696 x 0.078367 + 0.284949 = 0.339 on the live side.
+
+The changeover day is short by construction: the Mini's statistics only begin when it is enabled, so
+2026-09-07 carries gas only from 21:45 until the billed day lands. Do not rescale anything to
+"fix" it.
+
+Backups: `scratchpad/energy_prefs_pre_gas_hybrid.json` holds the previous Energy preferences and
+`/config/configuration.yaml.pre_gas_hybrid` the previous core config.
 
 ### Sankey node colours (2026-08-30)
 
@@ -294,10 +350,18 @@ the chart just quietly goes back to being up to an hour behind. So:
 - Verify after patching by selecting today (should track within ~5 min) and a date older than a
   week (must still render, via the `hour` fallback).
 
-Status 2026-08-28: **not yet applied.** There is no write path to `/config` from the dev machine --
-no ssh, samba, `shell_command`, `command_line` or `python_script` components, and the Supervisor
-API returns 401 to a long-lived token. Ports 22 and 22222 are closed. Applying it needs the
-Terminal & SSH add-on (or File editor) installed first.
+Status 2026-09-07: **still not applied, but no longer blocked.** The old blocker was that nothing
+could write to `/config`. That is fixed -- see below -- so this patch is now a straightforward job
+and should be done next time the card is touched.
+
+**There is now an SSH write path to `/config`** (opened 2026-09-07 to install `gas_hybrid`). The
+`core_ssh` add-on was already installed and running but ingress-only, with no authorized key and
+`22/tcp` unmapped. It now carries the dev machine's `~/.ssh/id_ed25519.pub`, maps **22/tcp -> 22222**,
+keeps `password` empty (key-only) and `tcp_forwarding` off: `ssh -p 22222 root@homeassistant.local`.
+Set through the **websocket** Supervisor API (`supervisor/api` -> `/addons/core_ssh/options`, then
+`/restart`), which works where the REST proxy still 401s. `ha core restart` from that shell takes
+about **four minutes** to come back, and `ha core logs` is the way to read the log -- HAOS keeps no
+current `/config/home-assistant.log`, only rotated `.1`/`.old` files.
 
 ### Helios and grid-voltage chart
 
@@ -305,7 +369,20 @@ Helios highlights the OSM building nearest the configured home. OSM has no build
 
 zone.home is deliberately at the owner's actual building centroid, **REDACTED_LAT, REDACTED_LON**, about 35 m from the postal point but inside the right footprint. That keeps ring, chips, and highlighted house together and remains within the 100 m presence radius. Do not “correct” it to the postal coordinate without revisiting this trade.
 
-**It reverted to the postal point REDACTED_LAT, REDACTED_LON across an HA restart on 2026-08-27, and had to be set again.** Cause not established -- `config_source` reads `storage` (so configuration.yaml is *not* overriding it) and re-applying it via the `config/core/update` websocket call persisted correctly, which leaves no obvious mechanism. Treat it as fragile: **check this coordinate after every HA restart**, because the symptom is subtle -- Helios simply highlights the wrong building and nothing errors. The value to restore is above; it also moves sun times, weather and the presence radius, so it is not merely cosmetic.
+**It reverts to the postal point REDACTED_LAT, REDACTED_LON on every HA restart, and the cause is now known.**
+`/config/configuration.yaml` carries, under `homeassistant:`, `latitude: REDACTED_LAT` and
+`longitude: REDACTED_LON` -- the postal point -- and YAML core config is applied at startup and wins.
+Verified 2026-09-07 after three restarts: `/api/config` reads `config_source: yaml` with those
+coordinates. The earlier note that `config_source` read `storage` was taken shortly after a
+`config/core/update` websocket call, which does set it to `storage` -- until the next restart, when
+YAML overwrites it again. So the websocket fix is real but temporary; **the durable fix is to edit
+those two lines in configuration.yaml** to REDACTED_LAT / REDACTED_LON (or delete them and let the
+storage value stand).
+
+Until that is done, treat it as fragile: **check this coordinate after every HA restart**, because
+the symptom is subtle -- Helios simply highlights the wrong building and nothing errors. It also
+moves sun times, weather and the presence radius, so it is not merely cosmetic. As of 2026-09-07 it
+**is** sitting at the wrong postal point.
 
 Helios home-latitude/home-longitude move only the building highlight, not ring, chips, or camera, so they are intentionally unused. A dragged camera stores helios:camera-pose:<lat>:<lon> in browser localStorage and overrides camera-pitch-deg; clear helios* keys to restore configured framing. Weather rendering is off because its grey veil flattens the scene. Buildings need high opacity with the custom palette. camera-pitch-deg wins only while camera-locked is true; unlocked stored pose wins.
 

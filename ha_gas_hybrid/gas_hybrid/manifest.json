@@ -1,0 +1,10 @@
+{
+  "domain": "gas_hybrid",
+  "name": "Gas hybrid statistics",
+  "version": "1.0.0",
+  "documentation": "https://github.com/davens/solis",
+  "dependencies": ["recorder"],
+  "codeowners": [],
+  "iot_class": "local_polling",
+  "requirements": []
+}
