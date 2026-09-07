@@ -358,6 +358,33 @@ value `i` is the range length and `Se(new Date, e||new Date)` is the age of the 
 `ha-sankey-chart.js.pre5min`. **This is still lost on every HACS update of the card** -- re-apply it
 as part of any such update.
 
+Verified live 2026-09-08 by driving the card's own data: 2026-09-05 and 2026-09-03 (inside the
+7-day guard, so `5minute`) render fully at 50.1 and 37.9 kWh across their flows, and **2026-08-31,
+eight days back and therefore on the `hour` fallback, still renders at 48.2 kWh** -- which is the
+failure the guard exists to prevent.
+
+Two traps met while verifying, both of which will fool the next person:
+
+- **The patched file is served, but browsers keep the old one.** The script URL carries
+  `?hacstag=<id>` and that tag does not change when the file is edited by hand, so an open tab
+  keeps its cached copy indefinitely. Check the server, not the page:
+  `curl -s http://homeassistant.local:8123/hacsfiles/ha-sankey-chart/ha-sankey-chart.js | grep -c 5minute`.
+  A `fetch()` from inside the HA page returned the *unpatched* text even with `cache: "no-store"`;
+  only a hard reload (cmd+shift+R) picked up the new bundle.
+- **Do not read the chart within a few seconds of a reload.** The documented first paint from
+  `hass.states` is very convincing: at 00:05, seconds after a hard reload, the chart showed "Grid
+  import 0.2 kWh -> House 0.1" and looked exactly like proof that the 5-minute period had taken
+  effect. It was the live daily counters, freshly reset at midnight; the range was still the
+  previous day, and the settled statistics arrived moments later showing that day's real 23.3 kWh
+  of solar.
+
+**How to drive the date selection without clicking:** the energy collection is on the connection
+under a key named for the dashboard -- `hass.connection["_energy_energy-live"]` -- exposing
+`setPeriod(start, end)` and `refresh()`. Combined with reading `SANKEY-CHART-BASE.__connections`
+this checks any date in a couple of seconds. Note that a date **before 2026-08-30 17:00 renders
+empty and always will**: the `sensor.flow_*_daily` meters did not exist yet, so every link value is
+absent. That is not a patch regression -- 2026-08-25 was misread that way once.
+
 **There is now an SSH write path to `/config`** (opened 2026-09-07 to install `gas_hybrid`). The
 `core_ssh` add-on was already installed and running but ingress-only, with no authorized key and
 `22/tcp` unmapped. It now carries the dev machine's `~/.ssh/id_ed25519.pub`, maps **22/tcp -> 22222**,
