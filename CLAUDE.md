@@ -350,9 +350,13 @@ the chart just quietly goes back to being up to an hour behind. So:
 - Verify after patching by selecting today (should track within ~5 min) and a date older than a
   week (must still render, via the `hour` fallback).
 
-Status 2026-09-07: **still not applied, but no longer blocked.** The old blocker was that nothing
-could write to `/config`. That is fixed -- see below -- so this patch is now a straightforward job
-and should be done next time the card is touched.
+Status 2026-09-07: **applied.** `grep -c 5minute` returns 1, and the arrow function now reads
+`const bi=(t,e)=>{const i=Se(e||new Date,t);return i>35?"month":i>2?"day":Se(new Date,e||new Date)<=7?"5minute":"hour"}`.
+The minified names were still `bi` and `Se`, and `Se`'s argument order was re-confirmed from the
+bundle before trusting the guard: it is date-fns signed day difference `t - e`, so inside `bi` the
+value `i` is the range length and `Se(new Date, e||new Date)` is the age of the selection. Backup at
+`ha-sankey-chart.js.pre5min`. **This is still lost on every HACS update of the card** -- re-apply it
+as part of any such update.
 
 **There is now an SSH write path to `/config`** (opened 2026-09-07 to install `gas_hybrid`). The
 `core_ssh` add-on was already installed and running but ingress-only, with no authorized key and
@@ -379,10 +383,12 @@ YAML overwrites it again. So the websocket fix is real but temporary; **the dura
 those two lines in configuration.yaml** to REDACTED_LAT / REDACTED_LON (or delete them and let the
 storage value stand).
 
-Until that is done, treat it as fragile: **check this coordinate after every HA restart**, because
-the symptom is subtle -- Helios simply highlights the wrong building and nothing errors. It also
-moves sun times, weather and the presence radius, so it is not merely cosmetic. As of 2026-09-07 it
-**is** sitting at the wrong postal point.
+**Fixed 2026-09-07: configuration.yaml now carries `latitude: REDACTED_LAT` / `longitude: REDACTED_LON`**,
+verified after a restart as `config_source: yaml` with `zone.home` at the same point. Because YAML
+is what wins at startup, this now survives restarts instead of being undone by them -- the old
+advice to re-check the coordinate after every restart no longer applies, but **do not "correct"
+these two lines back to the postal point**; the reasons are above, and this file is where the value
+lives now.
 
 Helios home-latitude/home-longitude move only the building highlight, not ring, chips, or camera, so they are intentionally unused. A dragged camera stores helios:camera-pose:<lat>:<lon> in browser localStorage and overrides camera-pitch-deg; clear helios* keys to restore configured framing. Weather rendering is off because its grey veil flattens the scene. Buildings need high opacity with the custom palette. camera-pitch-deg wins only while camera-locked is true; unlocked stored pose wins.
 
