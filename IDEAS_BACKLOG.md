@@ -12,7 +12,7 @@ See ANALYSIS.md for the cross-lane synthesis and what to build first.
 
 **What it does + why the owner cares:** When Octopus schedules a daytime Tesla dispatch, temporarily enable a charge window so the battery does not discharge into the car. This targets the known 30p–£1.50 opportunity, with an explicit restore transaction after the dispatch.
 
-**Entities and data needed:** `binary_sensor.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_dispatching`, `sensor.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_state`, dispatch-plan attributes, `sensor.solis_inverter_charge_window`, `sensor.solis_inverter_battery_charge_current_limit`, `sensor.solis_inverter_battery`, and `sensor.solis_inverter_timed_charging`. Uses `control.py` writes to charge-window registers `43143–43146`, with readback and guaranteed restoration.
+**Entities and data needed:** `binary_sensor.octopus_energy_<device>_intelligent_dispatching`, `sensor.octopus_energy_<device>_intelligent_state`, dispatch-plan attributes, `sensor.solis_inverter_charge_window`, `sensor.solis_inverter_battery_charge_current_limit`, `sensor.solis_inverter_battery`, and `sensor.solis_inverter_timed_charging`. Uses `control.py` writes to charge-window registers `43143–43146`, with readback and guaranteed restoration.
 
 **Rough value:** 30p–£1.50 per daytime dispatch.
 
@@ -48,7 +48,7 @@ See ANALYSIS.md for the cross-lane synthesis and what to build first.
 
 **What it does + why the owner cares:** During an Octopus daytime car dispatch, identifies whether running or pre-cooling the living room is cheaper than running the same cooling load at peak rate. It makes the dispatch’s extended cheap billing visible and can optionally trigger a bounded comfort automation.
 
-**Entities and data needed:** `binary_sensor.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_dispatching`, dispatch-plan attributes on the Octopus Tesla entity, `climate.living_room_air_conditioner`, `switch.living_room_air_conditioner_power`, `sensor.living_room_air_conditioner_energy_today`, `sensor.lumi_lumi_weather_temperature`, `sensor.lumi_lumi_weather_humidity`, and `sensor.octopus_energy_electricity_<meter>_<mpan>_current_rate`. The exact dispatch schedule must be confirmed in entity attributes.
+**Entities and data needed:** `binary_sensor.octopus_energy_<device>_intelligent_dispatching`, dispatch-plan attributes on the Octopus Tesla entity, `climate.living_room_air_conditioner`, `switch.living_room_air_conditioner_power`, `sensor.living_room_air_conditioner_energy_today`, `sensor.lumi_lumi_weather_temperature`, `sensor.lumi_lumi_weather_humidity`, and `sensor.octopus_energy_electricity_<meter>_<mpan>_current_rate`. The exact dispatch schedule must be confirmed in entity attributes.
 
 **Rough value:** A few pence per event; potentially 10–30p/day on heavy cooling days.
 
@@ -324,7 +324,7 @@ See ANALYSIS.md for the cross-lane synthesis and what to build first.
 
 **What it does + why the owner cares:** Compares each planned Intelligent dispatch with what actually happened: scheduled time versus observed charging time, planned kWh versus measured AC and pack kWh, and completed versus missed/under-delivered slots.
 
-**Entities and data needed:** Existing read-only `octopus.py` data from `flexPlannedDispatches` and `completedDispatches`; `binary_sensor.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_dispatching`; `sensor.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_state`; `sensor.tesla_charging_state`; `sensor.tesla_home_charging_energy`; `sensor.tesla_charge_energy_added`; and Recorder history. The existing `/api/state` car payload already contains planned spans and kWh estimates.
+**Entities and data needed:** Existing read-only `octopus.py` data from `flexPlannedDispatches` and `completedDispatches`; `binary_sensor.octopus_energy_<device>_intelligent_dispatching`; `sensor.octopus_energy_<device>_intelligent_state`; `sensor.tesla_charging_state`; `sensor.tesla_home_charging_energy`; `sensor.tesla_charge_energy_added`; and Recorder history. The existing `/api/state` car payload already contains planned spans and kWh estimates.
 
 **Rough value:** Insight and reliability; prevents discovering a missed ready-by charge after the fact.
 
@@ -336,7 +336,7 @@ See ANALYSIS.md for the cross-lane synthesis and what to build first.
 
 **What it does + why the owner cares:** Detects an Octopus dispatch outside the fixed 23:30–05:30 window and records whether the house battery supplied the car instead of cheap grid energy. It quantifies the parked opportunity without changing inverter settings.
 
-**Entities and data needed:** `binary_sensor.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_dispatching`; existing `/api/state` planned/current dispatch data; `sensor.tesla_charger_power`; `sensor.tesla_home_charging_power`; `sensor.solis_inverter_battery_power`; `sensor.solis_inverter_grid_power`; `sensor.solis_inverter_charge_window`; and `binary_sensor.solis_inverter_timed_charging`. Use Octopus dispatch timing rather than the rejected GPS home-gate approach.
+**Entities and data needed:** `binary_sensor.octopus_energy_<device>_intelligent_dispatching`; existing `/api/state` planned/current dispatch data; `sensor.tesla_charger_power`; `sensor.tesla_home_charging_power`; `sensor.solis_inverter_battery_power`; `sensor.solis_inverter_grid_power`; `sensor.solis_inverter_charge_window`; and `binary_sensor.solis_inverter_timed_charging`. Use Octopus dispatch timing rather than the rejected GPS home-gate approach.
 
 **Rough value:** Insight first; each qualifying event may expose roughly £0.30–£1.50 of avoidable value, depending on duration and export/battery conditions.
 
@@ -360,7 +360,7 @@ See ANALYSIS.md for the cross-lane synthesis and what to build first.
 
 **What it does + why the owner cares:** Shows whether the car is plugged in, has the requested target, and is likely to meet the ready-by time. It warns when the car is offline, not plugged in, or still short of target near departure.
 
-**Entities and data needed:** `sensor.tesla_battery`, `sensor.tesla_range`, `sensor.tesla_time_to_full_charge`, `sensor.tesla_charge_limit`, `binary_sensor.tesla_plugged_in`, `binary_sensor.tesla_charge_port`, `sensor.tesla_charging_state`, `sensor.tesla_state`, `sensor.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_state_of_charge`, `number.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_charge_target`, and `select.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_target_time`.
+**Entities and data needed:** `sensor.tesla_battery`, `sensor.tesla_range`, `sensor.tesla_time_to_full_charge`, `sensor.tesla_charge_limit`, `binary_sensor.tesla_plugged_in`, `binary_sensor.tesla_charge_port`, `sensor.tesla_charging_state`, `sensor.tesla_state`, `sensor.octopus_energy_<device>_intelligent_state_of_charge`, `number.octopus_energy_<device>_intelligent_charge_target`, and `select.octopus_energy_<device>_intelligent_target_time`.
 
 **Rough value:** Safety/reassurance; avoids an occasional failed morning departure.
 
@@ -515,7 +515,7 @@ See ANALYSIS.md for the cross-lane synthesis and what to build first.
 ### 1. “Should I run the dishwasher now?” decision card
 
 - **What it does + why the owner cares:** Gives a clear recommendation such as “run now,” “wait for solar,” or “wait until 23:30,” based on current electricity price, solar forecast, battery SOC/headroom, and Tesla dispatching. This answers a decision currently requiring manual calculation.
-- **Entities and data needed:** `sensor.octopus_energy_electricity_<meter>_<mpan>_current_rate`, `sensor.octopus_energy_electricity_<meter>_<mpan>_next_rate`, `binary_sensor.octopus_energy_electricity_<meter>_<mpan>_off_peak`, `sensor.solis_inverter_battery`, `sensor.solis_inverter_solar_power`, `sensor.solis_inverter_solar_forecast_today`, `sensor.solis_inverter_tomorrow_verdict`, `binary_sensor.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_dispatching`, and `sensor.sun_next_setting`. No dishwasher entity, power sensor, or controllable switch exists; the first version must therefore be advisory and use a configurable assumed dishwasher load/duration.
+- **Entities and data needed:** `sensor.octopus_energy_electricity_<meter>_<mpan>_current_rate`, `sensor.octopus_energy_electricity_<meter>_<mpan>_next_rate`, `binary_sensor.octopus_energy_electricity_<meter>_<mpan>_off_peak`, `sensor.solis_inverter_battery`, `sensor.solis_inverter_solar_power`, `sensor.solis_inverter_solar_forecast_today`, `sensor.solis_inverter_tomorrow_verdict`, `binary_sensor.octopus_energy_<device>_intelligent_dispatching`, and `sensor.sun_next_setting`. No dishwasher entity, power sensor, or controllable switch exists; the first version must therefore be advisory and use a configurable assumed dishwasher load/duration.
 - **Rough value:** Potentially 5–20p per run; mostly convenience.
 - **Effort:** Template sensors plus a dashboard card; new appliance hardware would improve accuracy.
 - **Risk or catch:** It cannot know whether the dishwasher is loaded or measure its actual consumption. It should never silently start the appliance.
@@ -531,7 +531,7 @@ See ANALYSIS.md for the cross-lane synthesis and what to build first.
 ### 3. Cheap-window and DST integrity timeline
 
 - **What it does + why the owner cares:** Renders the tariff’s 23:30–05:30 window, current inverter charge window, Tesla’s target time, dispatch slots, and rate bands on one timeline. It would make the 2026-10-25 BST→GMT failure visible before expensive charging occurs.
-- **Entities and data needed:** `sensor.solis_inverter_charge_window`, `binary_sensor.solis_inverter_timed_charging`, `sensor.solis_inverter_work_mode`, `sensor.solis_inverter_battery_charge_current_limit`, `binary_sensor.octopus_energy_electricity_<meter>_<mpan>_off_peak`, `event.octopus_energy_electricity_<meter>_<mpan>_current_day_rates`, `event.octopus_energy_electricity_<meter>_<mpan>_next_day_rates`, `select.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_target_time`, and `binary_sensor.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_dispatching`. The inverter RTC is not exposed as an entity; a read-only sensor for registers `43000`–`43005` is needed for an authoritative clock comparison.
+- **Entities and data needed:** `sensor.solis_inverter_charge_window`, `binary_sensor.solis_inverter_timed_charging`, `sensor.solis_inverter_work_mode`, `sensor.solis_inverter_battery_charge_current_limit`, `binary_sensor.octopus_energy_electricity_<meter>_<mpan>_off_peak`, `event.octopus_energy_electricity_<meter>_<mpan>_current_day_rates`, `event.octopus_energy_electricity_<meter>_<mpan>_next_day_rates`, `select.octopus_energy_<device>_intelligent_target_time`, and `binary_sensor.octopus_energy_<device>_intelligent_dispatching`. The inverter RTC is not exposed as an entity; a read-only sensor for registers `43000`–`43005` is needed for an authoritative clock comparison.
 - **Rough value:** One avoided tariff mistake could save roughly 30–70p around the clock transition.
 - **Effort:** Timeline card; modest integration work for the RTC sensor.
 - **Risk or catch:** Display and warning only. Any correction still requires the existing manual CLI `control.py set-time --apply` path.
@@ -563,7 +563,7 @@ See ANALYSIS.md for the cross-lane synthesis and what to build first.
 ### 7. Mobile “energy now” glance
 
 - **What it does + why the owner cares:** A single phone-width card answering: what is solar producing, what is the house using, is the battery charging or discharging, am I importing/exporting, what does today/tomorrow look like, and is the Tesla being dispatched?
-- **Entities and data needed:** `sensor.solis_inverter_solar_power`, `sensor.solis_inverter_house_load`, `sensor.solis_inverter_battery_power`, `sensor.solis_inverter_grid_power`, `sensor.solis_inverter_battery`, `sensor.solis_inverter_solar_today`, `sensor.solis_inverter_solar_forecast_today`, `sensor.solis_inverter_tomorrow_verdict`, `sensor.octopus_energy_electricity_<meter>_<mpan>_current_rate`, `binary_sensor.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_dispatching`, and `sensor.solis_inverter_charge_window`.
+- **Entities and data needed:** `sensor.solis_inverter_solar_power`, `sensor.solis_inverter_house_load`, `sensor.solis_inverter_battery_power`, `sensor.solis_inverter_grid_power`, `sensor.solis_inverter_battery`, `sensor.solis_inverter_solar_today`, `sensor.solis_inverter_solar_forecast_today`, `sensor.solis_inverter_tomorrow_verdict`, `sensor.octopus_energy_electricity_<meter>_<mpan>_current_rate`, `binary_sensor.octopus_energy_<device>_intelligent_dispatching`, and `sensor.solis_inverter_charge_window`.
 - **Rough value:** Convenience and quick situational awareness.
 - **Effort:** Dashboard-only layout using existing entities.
 - **Risk or catch:** Do not use the energy-date-selection statistics values for “now”; they intentionally lag and use hourly Recorder changes. Use live power entities for the glance view.
@@ -751,7 +751,7 @@ See ANALYSIS.md for the cross-lane synthesis and what to build first.
 ### Morning and evening household briefing
 
 - **What it does / why the owner cares:** Delivers a concise briefing covering tomorrow’s solar, battery state, Tesla plan, calendar, shopping list, aquarium deadlines, and unusual system faults; the evening version confirms the next cheap-charge window and tomorrow’s conditions.
-- **Entities and data needed:** `sensor.solis_inverter_solar_forecast_today`, `sensor.solis_inverter_solar_forecast_tomorrow`, `sensor.solis_inverter_tomorrow_verdict`, `sensor.solis_inverter_battery`, `sensor.solis_inverter_charge_window`, `sensor.solis_inverter_grid_power`, `select.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_target_time`, `sensor.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_state_of_charge`, `calendar.octopus_energy_a_xxxxxxxx_octoplus_power_down`, `todo.shopping_list`, aquarium maintenance entities, and `notify.<phone_2>`/`notify.<phone_1>` or `tts.google_en_com`.
+- **Entities and data needed:** `sensor.solis_inverter_solar_forecast_today`, `sensor.solis_inverter_solar_forecast_tomorrow`, `sensor.solis_inverter_tomorrow_verdict`, `sensor.solis_inverter_battery`, `sensor.solis_inverter_charge_window`, `sensor.solis_inverter_grid_power`, `select.octopus_energy_<device>_intelligent_target_time`, `sensor.octopus_energy_<device>_intelligent_state_of_charge`, `calendar.octopus_energy_<account>_octoplus_power_down`, `todo.shopping_list`, aquarium maintenance entities, and `notify.<phone_2>`/`notify.<phone_1>` or `tts.google_en_com`.
 - **Rough value:** Insight and reduced cognitive load; no guaranteed monetary value.
 - **Effort:** One briefing script/automation with concise templates and notification severity rules.
 - **Risk or catch:** Calendar and shopping-list contents are attributes/actions rather than useful state values; the briefing needs explicit handling for empty, unknown, and stale data. Avoid sending both a phone notification and spoken announcement for every minor change.

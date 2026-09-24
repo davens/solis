@@ -153,7 +153,7 @@ Two separate errors were untangled here:
    above.
 
 `zone.home` is therefore parked on the **centroid of the owner's actual building
-polygon** (REDACTED_LAT, REDACTED_LON), which is ~35 m from the postal address point
+polygon** (coordinates in `CLAUDE.local.md`), which is ~35 m from the postal address point
 but inside the right footprint - so the ring, the chips and the highlighted
 house all coincide. That is a deliberate trade: 35 m of address error buys a
 correct-looking scene, and it is well inside the 100 m `zone.home` radius so

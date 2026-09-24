@@ -29,7 +29,7 @@ sanity check on shape and sign, NOT ground truth. It is used that way here.
 What this suite does and does not prove
 ---------------------------------------
 It proves the *arithmetic* chain: recorded power -> left-Riemann integral ->
-twelve directed flows -> the daily counters. It cannot prove the attribution
+fifteen directed flows -> the daily counters. It cannot prove the attribution
 itself, because the inverter never measures which source fed which sink
 (CLAUDE.md, "Sankey: presentation, not measurement"). A flow that reconciles to
 its counter is consistent, not verified.
@@ -72,11 +72,32 @@ ALL_DAYS = FULL_DAYS + (PARTIAL_DAY,)
 # 2026-08-27 carries a single sample, at 13:27 local, and 48 049 s of the day
 # (55.6%) precede it. The other three days are complete from 00:00:00.
 #
-# For 2026-08-27 the replay assumes 0 W before the first sample. That is not a
-# guess: the day's own tesla_home_charging_energy counter reads max 0.000 kWh,
-# so the car demonstrably did not charge at all that day. The assumption is
-# asserted rather than trusted -- see
-# test_the_tesla_assumption_on_2026_08_27_is_backed_by_its_own_counter.
+# For 2026-08-27 the replay assumes 0 W before the first sample. **That
+# assumption is NOT backed by the day's own energy counter, and this file used
+# to claim it was.** The claim was that tesla_home_charging_energy reads max
+# 0.000 kWh so the car demonstrably did not charge; but that sensor is the
+# Riemann INTEGRAL of the power sensor that did not exist yet, and its own first
+# recorded state that day is `unknown` at essentially the same instant. Its zero
+# is the same absence wearing a second hat and corroborates nothing. The general
+# shape is worth carrying: a DERIVED sensor reading zero looks like independent
+# confirmation of its own source, and never is. Pinned by
+# test_replay_v2.py::test_a_derived_sensors_zero_is_not_evidence_about_its_source,
+# which exists because three separate agents reached for this same reasoning.
+#
+# The real reason the day stays usable is different and weaker, and it is enough:
+# T only ever decides how one metered load SPLITS. `Hr + T == house_load` for
+# every T, so the hold cannot move solar, battery-out, grid-import, export,
+# battery-in or the Inverter node -- demonstrated on this very day by
+# test_replay_v2.py::test_six_node_totals_are_provably_blind_to_the_tesla_reading,
+# which replays it with T forced to the far end of its legal range and requires
+# those six to be unchanged. What the hold DOES decide is House and Tesla
+# themselves, and those two are genuinely unknowable here: CLAUDE.md records
+# 8.384 kWh going into the car overnight, entirely inside the blind window.
+#
+# So `tesla_assumed_s` is the honest signal, not the counter. Note the harness
+# cannot detect this case on its own: `blind_channels()` is presence-based, and
+# the sidecar does carry a `tesla` series for this day -- one sample, 13.35 h in.
+# test_replay_v2.py is the file that refuses House and Tesla on that basis.
 TESLA_COMPLETE_DAYS = ("2026-08-28", "2026-08-29")
 TESLA_ASSUMED_DAY = "2026-08-27"
 
@@ -335,13 +356,21 @@ def test_the_tesla_channel_does_NOT_cover_2026_08_27():
 
 
 def test_the_tesla_assumption_on_2026_08_27_is_backed_by_its_own_counter():
-    """The replay assumes 0 W before the first Tesla sample. On 2026-08-27 that
-    is verifiable rather than merely plausible: the car's own daily energy
-    counter for the whole day reads 0.000 kWh, so it did not charge at all.
+    """**The name is a misnomer and the assertions mean less than it claims.**
+    Kept, at the same strength, with what they actually prove written down.
 
-    This is the test that makes 2026-08-27 usable. If a future re-capture ever
-    lands a day with a real gap AND a non-zero counter, this fires, and the
-    assumption must be revisited rather than inherited.
+    They do NOT back the 0 W hold. The car's energy counter is the Riemann
+    integral of the power sensor that did not exist yet, so its 0.000 kWh is
+    that absence a second time, not independent confirmation of it -- see the
+    module comment above and
+    test_replay_v2.py::test_a_derived_sensors_zero_is_not_evidence_about_its_source.
+    This was never "the test that makes 2026-08-27 usable"; what makes the day
+    usable is that every quantity this file reconciles is provably blind to T.
+
+    What they DO prove is a fixture property worth pinning: the counter reads
+    zero and the replayed Tesla node agrees with it. If a future re-capture ever
+    lands a day with a real gap AND a non-zero counter, this fires -- the hold
+    would then be visibly wrong rather than merely unevidenced.
     """
     assert tesla_counter(TESLA_ASSUMED_DAY) == 0.0
     assert result(TESLA_ASSUMED_DAY)["derived"]["tesla"] == pytest.approx(0.0, abs=EXACT_KWH)
@@ -635,9 +664,12 @@ def test_every_integrated_flow_is_non_negative(day):
 
 
 @pytest.mark.parametrize("day", ALL_DAYS)
-def test_all_twelve_flows_are_present(day):
+def test_all_fifteen_flows_are_present(day):
+    """Fifteen since 2026-09-11, when air con became the sixth input channel and
+    a sink of its own. The count is pinned rather than merely compared against
+    `FLOWS` so that a flow silently disappearing from BOTH sides still fails."""
     assert set(result(day)["flows"]) == set(FLOWS)
-    assert len(FLOWS) == 12
+    assert len(FLOWS) == 15
 
 
 @pytest.mark.parametrize("day", ALL_DAYS)
@@ -650,17 +682,238 @@ def test_no_battery_to_grid_flow_can_exist(day):
 
 
 @pytest.mark.parametrize("day", ALL_DAYS)
-def test_house_inflows_reproduce_the_house_load_excluding_the_car(day):
-    """v2's House node is house_load MINUS the car, and its three inflows must
-    fill it to the last watt-second.
+def test_house_and_aircon_inflows_reproduce_the_house_load_excluding_the_car(day):
+    """v2's House node is house_load MINUS the car and MINUS the air con, and
+    the six inflows of the two together must fill `house_load - tesla` to the
+    last watt-second.
 
     v1 compared against the full house_load and could not close, because it had
     no Tesla term and no Inverter node. The comparison target changed; the
-    standard got STRICTER, from a 0.15 kWh carve-out to floating-point noise.
+    standard got STRICTER, from a 0.15 kWh carve-out to floating-point noise --
+    and it stayed at that standard when air con arrived on 2026-09-11.
+
+    Why the SUM and not House alone: `Hr + A == house_load - T` for every A, so
+    the sum is knowable from channels these captures actually carry, while House
+    by itself needs the air-con reading that none of them has. Asserting House
+    alone here would only be asserting that the harness fed 0 W in -- a
+    tautology, and the same shape as justifying the Tesla hold by its own
+    derived counter.
     """
     r = result(day)
     house_excl_car = r["raw"]["house"] - r["raw"]["tesla"]
-    assert r["derived"]["house"] == pytest.approx(house_excl_car, abs=EXACT_KWH)
+    assert r["derived"]["house_and_aircon"] == pytest.approx(
+        house_excl_car, abs=EXACT_KWH)
+
+
+@pytest.mark.parametrize("day", ALL_DAYS)
+def test_the_house_and_aircon_split_is_refused_while_the_aircon_channel_is_blind(day):
+    """The other half of the test above, and the reason it sums two nodes.
+
+    No capture carries an air-con series, so House and Air con individually are
+    unknowable on every replayed day -- exactly the ruling 2026-08-27's Tesla
+    gets. `replay.unknowable()` must say so, and must NOT extend the refusal to
+    their sum or to anything the air-con reading cannot move.
+
+    Pinning the channel at 0 and reporting House as a measurement was the
+    alternative, and it was rejected: it reads the harness's own input back out
+    as data, and these four days really did have an air-con load that nobody
+    was measuring.
+    """
+    doc = result(day)["doc"]
+    assert replay.blind_channels(doc) >= frozenset(("aircon",))
+    dead = replay.unknowable(doc)
+    assert {"house", "aircon"} <= dead, (
+        "%s reports House/Air con as measurements while the air-con channel is "
+        "blind" % day)
+    assert "house_and_aircon" not in dead
+    for survivor in ("tesla", "inverter", "grid_export", "grid_import",
+                     "battery_charge", "battery_discharge", "solar"):
+        assert survivor not in dead, (
+            "%s: %s is refused although no air-con reading can move it"
+            % (day, survivor))
+
+
+@pytest.mark.parametrize("day", ALL_DAYS)
+def test_the_aircon_zero_is_an_assumption_and_is_counted_as_one(day):
+    """A blind channel held at 0 W must never be silently absorbed. Every live
+    second of every replayed day runs on that assumption for air con, and the
+    harness reports the seconds rather than leaving the Air con node's 0.000
+    kWh looking like a measured zero."""
+    r = result(day)
+    assert r["aircon_assumed_s"] == pytest.approx(r["live_s"], abs=1e-6)
+    assert r["derived"]["aircon"] == pytest.approx(0.0, abs=EXACT_KWH)
+    for source in ("solar", "battery", "grid"):
+        assert r["flows"][source + "_to_aircon"] == pytest.approx(0.0, abs=1e-12)
+
+
+# --- the air-con channel, and what a blind channel does and does not cost ----
+
+# Inputs the four recorded days never reach, so that the degeneracy below is
+# tested where the clamps actually bind and not only in the regime the captures
+# happen to cover. Each is (solar, battery, grid, house, tesla) in watts.
+DEGENERACY_CORNERS = (
+    (0.0, 0.0, 0.0, 0.0, 0.0),              # everything off: the /0 guard
+    (0.0, 0.0, 0.0, 900.0, 0.0),            # sinks with no supply at all
+    (100.0, 0.0, 0.0, 0.0, 0.0),            # supply with no sink
+    (1000.0, 0.0, -4000.0, 200.0, 0.0),     # export out-reads solar: s2e caps
+    (0.0, 0.0, 3000.0, 2000.0, 7000.0),     # tesla out-reads house: T clamps
+    (0.0, 0.0, 7200.0, 7000.0, 6900.0),     # T takes all but 100 W of the house
+    (4000.0, -40.0, 0.0, 500.0, 0.0),       # the trickle sample BAND_TABLE is for
+    (-50.0, 0.0, -0.0, -10.0, -20.0),       # negatives, which max(0, .) eats
+    (5e-324, 5e-324, 5e-324, 5e-324, 0.0),  # denormals: the underflow fallback
+)
+
+
+def _five_channel_reference(solar, battery, grid, house, tesla):
+    """The v2 model exactly as it stood BEFORE the air con, transcribed by hand.
+
+    Written out rather than obtained by restricting the six-channel model to
+    itself, because a restriction cannot fail: it is the same code. This is an
+    independent statement of the old law, the same device `test_layout_v2.py`
+    uses with `_prop_ref`.
+
+    The share rule is borrowed from flows.py rather than re-derived. What is
+    under test is the air-con carve-out, not the loss rule, and borrowing it
+    keeps the comparison exact under either rule rather than pinning the test
+    to `proportional`.
+    """
+    import flows as fmod
+    house = max(0.0, house)
+    t = min(max(0.0, tesla), house)
+    s = max(0.0, solar)
+    charge, discharge = max(0.0, battery), max(0.0, -battery)
+    imp, exp = max(0.0, grid), max(0.0, -grid)
+    house_rest = house - t
+    loss = max(0.0, (s + discharge + imp) - (house_rest + t + charge + exp))
+    s2e = min(s, exp)
+    shares = fmod.LOSS_RULES[fmod.LOSS_RULE](s - s2e, discharge, imp)
+    out = {"solar_to_export": s2e}
+    for sink, amount, node in (("house_rest", house_rest, "house"),
+                               ("tesla", t, "tesla"),
+                               ("charge", charge, "battery"),
+                               ("loss", loss, "inverter")):
+        ws, wb, wg = shares[sink]
+        out["solar_to_" + node] = amount * ws
+        out["battery_to_" + node] = amount * wb
+        out["grid_to_" + node] = amount * wg
+    del out["battery_to_battery"]
+    return out
+
+
+def _assert_degenerate(where, solar, battery, grid, house, tesla):
+    """decompose(..., aircon=0) must equal the five-channel model BIT for BIT."""
+    got = decompose(solar, battery, grid, house, tesla, 0.0)
+    want = _five_channel_reference(solar, battery, grid, house, tesla)
+    for source in ("solar", "battery", "grid"):
+        key = source + "_to_aircon"
+        assert got[key] == 0.0, "%s: %s = %r at A = 0" % (where, key, got[key])
+    assert set(got) - set(want) == {"solar_to_aircon", "battery_to_aircon",
+                                    "grid_to_aircon"}
+    for key, value in want.items():
+        assert got[key] == value, (
+            "%s: %s moved when the air con arrived: %r != %r"
+            % (where, key, got[key], value))
+
+
+@pytest.mark.parametrize("day", ALL_DAYS)
+def test_the_six_channel_model_degenerates_exactly_to_the_five_channel_one(day):
+    """At A = 0 the six-channel model must BE the five-channel one, exactly.
+
+    This is what licenses every counter reconciliation in this file surviving
+    2026-09-11 unchanged. The captures carry no air-con series, so the replay
+    holds the channel at 0 W; if that hold perturbed any of the twelve original
+    flows by so much as a ULP, every tolerance here would be measuring the
+    harness's own input instead of the physics.
+
+    The claim is bit-identity, not floating-point closeness, and it is not
+    optimism. `A = 0` enters the arithmetic in exactly two places: an extra
+    `+ 0.0` inside `inverter_loss`'s `drawn`, which is an IEEE-754 no-op for the
+    non-negative values there, and a fourth sink of size 0.0 whose three
+    products are `0.0 * share`. The share matrix itself is a function of the
+    three SOURCES alone, so a fourth sink cannot move it.
+
+    Exact equality also makes this a much sharper regression detector than a
+    tolerance would: reorder a sum inside `inverter_loss`, or make a share row
+    depend on a sink, and this fails immediately rather than at the fourth
+    decimal place on some future day.
+
+    This was written to satisfy a ruling that air con be pinned at 0 rather than
+    blinded, and is kept after that ruling was reversed, because the property is
+    worth measuring whatever the REPORTING policy is: degeneracy is about the
+    arithmetic, blindness is about what may be called a measurement.
+    """
+    doc = result(day)["doc"]
+    end = replay.last_sample_epoch(doc) if day == PARTIAL_DAY else None
+    checked = 0
+    for t, _dt, v in replay.intervals(doc, end):
+        if any(v[c] is None for c in replay.CHANNELS):
+            continue
+        tesla = v.get("tesla")
+        _assert_degenerate("%s t=%.0f" % (day, t), v["solar"], v["battery"],
+                           v["grid"], v["house"],
+                           0.0 if tesla is None else tesla)
+        checked += 1
+    # Guard against a silent no-op: a day that skipped every sample would pass
+    # the loop above without testing anything. Measured 2026-09-11: 12570,
+    # 14816, 15615 and 15908 windows on the four days.
+    assert checked > 10_000, "%s: only %d windows checked" % (day, checked)
+
+
+def test_the_degeneracy_holds_at_the_corners_the_recorded_days_never_reach():
+    """The same property where the clamps bind, which real history does not do.
+
+    The four captures are ordinary domestic days: the Tesla never out-reads the
+    house, export never out-reads solar, and nothing is denormal. Those are
+    precisely the branches where a mis-placed air-con term would first show,
+    so they are exercised directly rather than hoped for.
+    """
+    for corner in DEGENERACY_CORNERS:
+        _assert_degenerate("corner %r" % (corner,), *corner)
+
+
+@pytest.mark.parametrize("day", ALL_DAYS)
+def test_a_four_channel_doc_refuses_the_tesla_quantities_as_well(day):
+    """Blindness is per channel, and the two blind channels cost different sets.
+
+    This test used to assert that the car was the ONE channel that could go
+    blind. That stopped being true on 2026-09-11: air con is blind on every
+    recorded day, permanently, because no capture carries the series and none
+    ever will. So the property is re-encoded rather than dropped -- a
+    five-channel doc must refuse the air-con quantities AND NOTHING ELSE, while
+    the same day loaded without its Tesla sidecar refuses the Tesla ones too.
+
+    The `and nothing else` half is the one that bites. A blanket refusal would
+    be perfectly safe and perfectly useless: it would discard the inverter,
+    export, battery and grid reconciliations that these four days exist to
+    provide. What keeps them is `flows.DEPENDS_ON` being MINIMAL as well as
+    complete, so this asserts set equality against it, not a subset.
+    """
+    import flows as fmod
+    five = replay.load_day(day, tesla=True)
+    four = replay.load_day(day, tesla=False)
+
+    assert replay.blind_channels(five) == frozenset(("aircon",))
+    assert replay.blind_channels(four) == frozenset(("aircon", "tesla"))
+
+    dead_five = fmod.unreportable(replay.blind_channels(five))
+    dead_four = fmod.unreportable(replay.blind_channels(four))
+    assert dead_five == fmod.unreportable(frozenset(("aircon",)))
+    assert dead_five < dead_four, "the car costs nothing extra to go blind"
+
+    # What the car costs on top: exactly the quantities that read T and not A.
+    tesla_only = frozenset(("solar_to_tesla", "battery_to_tesla",
+                            "grid_to_tesla", "tesla"))
+    assert dead_four - dead_five == tesla_only
+
+    # And what neither blindness touches, which is why the day stays usable.
+    for survivor in ("solar_to_export", "export", "inverter", "battery_in",
+                     "solar_to_battery", "grid_to_battery",
+                     "solar_to_inverter", "battery_to_inverter",
+                     "grid_to_inverter", "solar_spent", "battery_spent",
+                     "grid_spent"):
+        assert survivor not in dead_four, (
+            "%s is refused although neither the car nor the air con can move it"
+            % survivor)
 
 
 @pytest.mark.parametrize("day", ALL_DAYS)
@@ -733,18 +986,20 @@ def test_the_decomposition_conserves_energy_between_sources_and_sinks(day):
     same six flow keys twice in a different order and asserted abs(x - x) < 1e-9.
 
     This version groups by SOURCE on one side and by SINK on the other, which
-    are genuinely different partitions of the twelve flows, so a flow that were
+    are genuinely different partitions of the fifteen flows, so a flow that were
     counted in one grouping and not the other would show up.
     """
     f = result(day)["flows"]
     by_source = sum(source_spend(day, s) for s in ("solar", "battery", "grid"))
     by_sink = sum(v for k, v in f.items())
     assert by_source == pytest.approx(by_sink, abs=1e-9)
-    # ...and the sink-side grouping really is a partition of all twelve keys.
-    sinks = ("house", "tesla", "battery", "export", "inverter")
+    # ...and the sink-side grouping really is a partition of all fifteen keys.
+    # `aircon` joined the list on 2026-09-11; omitting it here would have left
+    # three flows out of the sink-side sum and this test would have caught it.
+    sinks = ("house", "tesla", "aircon", "battery", "export", "inverter")
     counted = sum(v for k, v in f.items() if k.split("_to_")[1] in sinks)
     assert counted == pytest.approx(by_sink, abs=1e-9)
-    assert len(f) == 12
+    assert len(f) == 15
 
 
 # ===========================================================================
@@ -881,12 +1136,15 @@ def test_report_the_two_loss_rules_measured_over_every_replay_day(capsys):
 # ===========================================================================
 
 @pytest.mark.parametrize("day", ALL_DAYS)
-def test_house_plus_tesla_flows_match_house_consumption_today(day):
-    """v2 splits house_load into House and Tesla, so the counter comparison is
-    against their SUM. Bounded by house_load's own shortfall against the
-    counter, which the decomposition inherits and cannot fix (see section 4)."""
+def test_house_plus_aircon_plus_tesla_flows_match_house_consumption_today(day):
+    """v2 splits house_load into House, Air con and Tesla, so the counter
+    comparison is against the sum of all three -- and that sum is knowable even
+    with the air-con channel blind, because the split between House and Air con
+    moves energy only between them. Bounded by house_load's own shortfall
+    against the counter, which the decomposition inherits and cannot fix (see
+    section 4)."""
     r = result(day)
-    got = r["derived"]["house"] + r["derived"]["tesla"]
+    got = r["derived"]["house_and_aircon"] + r["derived"]["tesla"]
     want = counter(day, "house")
     err = signed_pct(got, want)
     assert -HOUSE_SHORTFALL_PCT_MAX <= err <= DEPLOY_TOL_PCT, (

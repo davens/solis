@@ -1,11 +1,13 @@
 // Screenshot an HA dashboard path in headless Chrome, authenticated with the long-lived token held
 // in memory only: off-the-record browser context, token injected before the app boots, profile deleted.
 // usage: node hashot.js <path> <width> <height> <waitSec> <out.png>
+// HA_URL (default http://homeassistant.local:8123) and HA_TOKEN come from the environment; without HA_TOKEN the
+// token is read from the home-assistant MCP entry for this repo in ~/.claude.json.
 const fs = require('fs'), os = require('os'), path = require('path'), { spawn } = require('child_process');
 const [p, W, H, waitS, out] = process.argv.slice(2);
-const HA = 'http://homeassistant.local:8123';
-const tok = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8'))
-  .projects['~/code/solis'].mcpServers['home-assistant'].headers.Authorization.replace('Bearer ', '');
+const HA = (process.env.HA_URL || 'http://homeassistant.local:8123').replace(/\/+$/, '');
+const tok = process.env.HA_TOKEN || JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8'))
+  .projects[fs.realpathSync(path.join(__dirname, '..'))].mcpServers['home-assistant'].headers.Authorization.replace('Bearer ', '');
 const prof = fs.mkdtempSync(path.join(__dirname, 'chrome-prof-'));
 const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   ['--headless=new', '--disable-gpu', '--hide-scrollbars', '--remote-debugging-port=9333', `--user-data-dir=${prof}`, 'about:blank'], { stdio: 'ignore' });

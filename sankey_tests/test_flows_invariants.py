@@ -11,13 +11,22 @@ to trust the implementation's own docstring:
     C  = max(0,  battery)          DC stored
     G  = max(0,  grid)             AC import
     E  = max(0, -grid)             AC export
-    T  = min(tesla, house_load)    AC, clamped
-    Hr = house_load - T            AC, the rest of the house
-    L  = max(0, (S+B+G) - (Hr+T+C+E))          the Inverter node
+    T  = min(tesla, house_load)    AC, clamped, carved out FIRST
+    A  = min(aircon, house_load-T) AC, clamped to whatever the Tesla left
+    Hr = house_load - T - A        AC, the rest of the house
+    L  = max(0, (S+B+G) - (Hr+T+A+C+E))        the Inverter node
 
     step 1   s2e = min(S, E);  S1 = S - s2e     export is structurally solar-only
     step 2   w, b, g = S1/den, B/den, G/den     den = S1 + B + G
-             every remaining sink (Hr, T, C, L) draws that same mix.
+             every remaining sink (Hr, T, A, C, L) draws that same mix.
+
+The air-con channel is the sixth and newest. It is carved out of the house load
+AFTER the Tesla, and that asymmetry is load-bearing rather than incidental: T
+never moves when the air-con reading does, so the three `*_to_tesla` flows stay
+genuinely blind to `aircon`, while the three `*_to_house` flows do not. `L` is
+untouched by the split because `Hr + T + A == house_load` for every clamp
+outcome, which is why the Inverter node and both grid/battery sinks remain blind
+to it too.
 
 Three things about that rule matter more than anything else here, and each has
 its own block of tests below.
@@ -36,24 +45,24 @@ the test that pins the difference.
 EXACT is only true in one regime.** Proof sketch, worth reading before touching
 a tolerance:
 
-    if E <= S and (S+B+G) >= (Hr+T+C+E), then L is not clamped and
-        Hr + T + C + L = S + B + G - E = S1 + B + G = den
+    if E <= S and (S+B+G) >= (Hr+T+A+C+E), then L is not clamped and
+        Hr + T + A + C + L = S + B + G - E = S1 + B + G = den
     so each source's outbound sum is exactly its own reading, and each sink is
     exactly filled. Two regimes break it, in opposite and unequal ways:
 
     E > S   -- solar cannot cover the metered export. Export is STARVED by E-S
                (`s2e` is capped at S), and because `L` still subtracts the full
-               E, `Hr+T+C+L < den`, so battery and grid UNDER-spend. Sources
+               E, `Hr+T+A+C+L < den`, so battery and grid UNDER-spend. Sources
                short, one sink short. Under-spend renders a shorter bar, which
                CLAUDE.md already records as expected and not an error.
     L == 0  -- the sample says the sinks drew more than the sources delivered.
-               Now `Hr+T+C > den` and every source OVER-spends. The card clamps
+               Now `Hr+T+A+C > den` and every source OVER-spends. The card clamps
                an overstated ribbon against the parent remainder, so this is the
                safe direction, but it is not "exact" and is not reported as such.
 
-    In BOTH broken regimes House, Tesla, Battery-in and Inverter are still filled
-    exactly, because the three shares sum to 1 whatever `den` is. Only Export and
-    the source totals move.
+    In BOTH broken regimes House, Tesla, Air con, Battery-in and Inverter are
+    still filled exactly, because the three shares sum to 1 whatever `den` is.
+    Only Export and the source totals move.
 
 So: `test_source_conservation_is_exact_when_well_conditioned` is strict, the two
 regime tests pin the direction of each failure, and no test anywhere hides a
@@ -132,17 +141,24 @@ SOURCES = ("solar", "battery", "grid")
 KEYS = (
     "solar_to_house",
     "solar_to_tesla",
+    "solar_to_aircon",
     "solar_to_battery",
     "solar_to_export",
     "solar_to_inverter",
     "battery_to_house",
     "battery_to_tesla",
+    "battery_to_aircon",
     "battery_to_inverter",
     "grid_to_house",
     "grid_to_tesla",
+    "grid_to_aircon",
     "grid_to_battery",
     "grid_to_inverter",
 )
+
+# Every sink a flow may land in. Air con joined on 2026-09-11; like the other
+# five it is a TERMINUS, so nothing may leave it.
+SINKS = ("house", "tesla", "aircon", "battery", "export", "inverter")
 
 # Links that must not merely evaluate to zero -- they must not exist. A key that
 # is present and zero is a link somebody can later populate; an absent key is a
@@ -157,6 +173,13 @@ FORBIDDEN_KEYS = (
     "solar_to_solar",
     "grid_to_grid",
     "export_to_house",
+    # Air con is a terminus in section 1, exactly like House and Tesla. A link
+    # leaving it would put the chart back into the three-column v1 shape that
+    # was deliberately dropped.
+    "aircon_to_house",
+    "aircon_to_inverter",
+    "house_to_aircon",
+    "tesla_to_aircon",
 )
 
 
@@ -223,7 +246,7 @@ def _assert_close(a, b, what, rel=FP_REL, abs_=FP_ABS):
 # reference to this, so a shared misreading of the brief cannot pass silently.
 # ---------------------------------------------------------------------------
 
-def reference(solar, battery, grid, house, tesla):
+def reference(solar, battery, grid, house, tesla, aircon):
     S = max(0.0, float(solar))
     B = max(0.0, -float(battery))
     C = max(0.0, float(battery))
@@ -231,8 +254,9 @@ def reference(solar, battery, grid, house, tesla):
     E = max(0.0, -float(grid))
     H = max(0.0, float(house))
     T = min(max(0.0, float(tesla)), H)
-    Hr = H - T
-    L = max(0.0, (S + B + G) - (Hr + T + C + E))
+    A = min(max(0.0, float(aircon)), H - T)
+    Hr = H - T - A
+    L = max(0.0, (S + B + G) - (Hr + T + A + C + E))
 
     s2e = min(S, E)
     S1 = S - s2e
@@ -245,21 +269,24 @@ def reference(solar, battery, grid, house, tesla):
     out = {
         "solar_to_house": w * Hr,
         "solar_to_tesla": w * T,
+        "solar_to_aircon": w * A,
         "solar_to_battery": w * C,
         "solar_to_export": s2e,
         "solar_to_inverter": w * L,
         "battery_to_house": b * Hr,
         "battery_to_tesla": b * T,
+        "battery_to_aircon": b * A,
         "battery_to_inverter": b * L,
         "grid_to_house": g * Hr,
         "grid_to_tesla": g * T,
+        "grid_to_aircon": g * A,
         "grid_to_battery": g * C,
         "grid_to_inverter": g * L,
     }
     return out
 
 
-def parts(solar, battery, grid, house, tesla):
+def parts(solar, battery, grid, house, tesla, aircon):
     """The intermediate quantities, for tests that need to reason about regime."""
     S = max(0.0, float(solar))
     B = max(0.0, -float(battery))
@@ -268,16 +295,17 @@ def parts(solar, battery, grid, house, tesla):
     E = max(0.0, -float(grid))
     H = max(0.0, float(house))
     T = min(max(0.0, float(tesla)), H)
-    Hr = H - T
-    L_raw = (S + B + G) - (Hr + T + C + E)
-    return dict(S=S, B=B, C=C, G=G, E=E, H=H, T=T, Hr=Hr,
+    A = min(max(0.0, float(aircon)), H - T)
+    Hr = H - T - A
+    L_raw = (S + B + G) - (Hr + T + A + C + E)
+    return dict(S=S, B=B, C=C, G=G, E=E, H=H, T=T, A=A, Hr=Hr,
                 L=max(0.0, L_raw), L_raw=L_raw,
                 supply=S + B + G, den=(S - min(S, E)) + B + G)
 
 
-def well_conditioned(solar, battery, grid, house, tesla):
+def well_conditioned(solar, battery, grid, house, tesla, aircon):
     """The regime in which the brief's 'EXACT' claim is provable."""
-    p = parts(solar, battery, grid, house, tesla)
+    p = parts(solar, battery, grid, house, tesla, aircon)
     return p["E"] <= p["S"] and p["L_raw"] >= 0.0
 
 
@@ -290,8 +318,13 @@ BATTERY = st.floats(-5000.0, 5000.0, allow_nan=False, allow_infinity=False)
 GRID = st.floats(-6000.0, 10000.0, allow_nan=False, allow_infinity=False)
 HOUSE = st.floats(0.0, 12000.0, allow_nan=False, allow_infinity=False)
 TESLA = st.floats(0.0, 11000.0, allow_nan=False, allow_infinity=False)
+# The LG unit is a few kW at most, but the strategy deliberately reaches past
+# the house load so the `min(aircon, house - tesla)` clamp is drawn on regularly
+# rather than only by the hand-written boundary cases.
+AIRCON = st.floats(0.0, 9000.0, allow_nan=False, allow_infinity=False)
 
-BASE = dict(solar=SOLAR, battery=BATTERY, grid=GRID, house=HOUSE, tesla=TESLA)
+BASE = dict(solar=SOLAR, battery=BATTERY, grid=GRID, house=HOUSE, tesla=TESLA,
+            aircon=AIRCON)
 
 # Wildly out of range, wrong sign, denormal -- still must not break anything.
 WILD = dict(
@@ -300,6 +333,7 @@ WILD = dict(
     grid=st.floats(-9e4, 9e4, allow_nan=False, allow_infinity=False),
     house=st.floats(-9e4, 9e4, allow_nan=False, allow_infinity=False),
     tesla=st.floats(-9e4, 9e4, allow_nan=False, allow_infinity=False),
+    aircon=st.floats(-9e4, 9e4, allow_nan=False, allow_infinity=False),
 )
 
 _NO_HEALTH = [HealthCheck.too_slow, HealthCheck.filter_too_much]
@@ -329,6 +363,7 @@ SCALED = dict(
     grid=_realistic(-6000.0, 10000.0),
     house=_realistic(0.0, 12000.0),
     tesla=_realistic(0.0, 11000.0),
+    aircon=_realistic(0.0, 9000.0),
 )
 
 
@@ -338,7 +373,7 @@ def consistent(draw, force_export=False, force_charge=False):
 
     Built forwards from the sources so the house load is a consequence rather
     than an independent draw -- which is what makes the well-conditioned regime
-    reachable at all. A blind five-way draw lands in it essentially never.
+    reachable at all. A blind six-way draw lands in it essentially never.
     """
     S = draw(st.floats(0.0, 6500.0, allow_nan=False, allow_infinity=False))
     charging = draw(st.booleans()) or force_charge
@@ -365,10 +400,16 @@ def consistent(draw, force_export=False, force_charge=False):
     rest = room - L
     assume(rest >= 0.0)
     T = draw(st.floats(0.0, rest, allow_nan=False, allow_infinity=False))
+    # Air con comes out of what the Tesla left, so drawing it from `rest - T`
+    # keeps Hr >= 0 without relying on flows.py's own clamp -- a sample that
+    # needed the clamp would no longer be well-conditioned by construction.
+    A = draw(st.floats(0.0, max(0.0, rest - T),
+                       allow_nan=False, allow_infinity=False))
+    assume(T + A <= rest)
     house = rest
     battery = C if C else -B
     grid = G if G else -E
-    return (S, battery, grid, house, T)
+    return (S, battery, grid, house, T, A)
 
 
 # ===========================================================================
@@ -377,20 +418,21 @@ def consistent(draw, force_export=False, force_charge=False):
 
 @given(**BASE)
 @SETTINGS
-def test_returned_keys_are_exactly_the_twelve(solar, battery, grid, house, tesla):
-    assert set(decompose(solar, battery, grid, house, tesla)) == set(KEYS)
+def test_returned_keys_are_exactly_the_fifteen(
+        solar, battery, grid, house, tesla, aircon):
+    assert set(decompose(solar, battery, grid, house, tesla, aircon)) == set(KEYS)
 
 
-def test_there_are_exactly_twelve_flows():
-    assert len(KEYS) == 12
-    assert len(set(KEYS)) == 12
-    assert len(decompose(3000.0, -500.0, -200.0, 2000.0, 800.0)) == 12
+def test_there_are_exactly_fifteen_flows():
+    assert len(KEYS) == 15
+    assert len(set(KEYS)) == 15
+    assert len(decompose(3000.0, -500.0, -200.0, 2000.0, 800.0, 400.0)) == 15
 
 
 @pytest.mark.parametrize("key", FORBIDDEN_KEYS)
 def test_structurally_impossible_links_have_no_key_at_all(key):
     """Absent, not zero. A zero-valued key is a link waiting to be populated."""
-    f = decompose(3000.0, -500.0, -200.0, 2000.0, 800.0)
+    f = decompose(3000.0, -500.0, -200.0, 2000.0, 800.0, 0.0)
     assert key not in f, (
         "%s exists. All three discharge windows are unset and CLAUDE.md forbids "
         "drawing battery -> grid; a key that merely evaluates to 0.0 today is "
@@ -399,28 +441,28 @@ def test_structurally_impossible_links_have_no_key_at_all(key):
 
 @given(**BASE)
 @SETTINGS
-def test_every_flow_is_a_finite_float(solar, battery, grid, house, tesla):
-    for k, v in decompose(solar, battery, grid, house, tesla).items():
+def test_every_flow_is_a_finite_float(solar, battery, grid, house, tesla, aircon):
+    for k, v in decompose(solar, battery, grid, house, tesla, aircon).items():
         assert isinstance(v, float), "%s is %r" % (k, type(v))
         assert math.isfinite(v), "%s is %r" % (k, v)
 
 
 @given(**BASE)
 @SETTINGS
-def test_result_is_a_fresh_mapping_that_cannot_leak(solar, battery, grid, house, tesla):
-    a = decompose(solar, battery, grid, house, tesla)
+def test_result_is_a_fresh_mapping_that_cannot_leak(solar, battery, grid, house, tesla, aircon):
+    a = decompose(solar, battery, grid, house, tesla, aircon)
     a["solar_to_house"] = -1e9
     a["injected"] = 1.0
-    b = decompose(solar, battery, grid, house, tesla)
+    b = decompose(solar, battery, grid, house, tesla, aircon)
     assert "injected" not in b
     assert b["solar_to_house"] != -1e9 or a is not b
 
 
 @given(**BASE)
 @SETTINGS
-def test_deterministic(solar, battery, grid, house, tesla):
-    a = decompose(solar, battery, grid, house, tesla)
-    b = decompose(solar, battery, grid, house, tesla)
+def test_deterministic(solar, battery, grid, house, tesla, aircon):
+    a = decompose(solar, battery, grid, house, tesla, aircon)
+    b = decompose(solar, battery, grid, house, tesla, aircon)
     assert a == b
 
 
@@ -429,21 +471,21 @@ def test_deterministic(solar, battery, grid, house, tesla):
 # ===========================================================================
 
 @given(**BASE)
-@example(solar=0.0, battery=0.0, grid=0.0, house=0.0, tesla=0.0)
-@example(solar=6500.0, battery=-5000.0, grid=-6000.0, house=0.0, tesla=0.0)
-@example(solar=0.0, battery=5000.0, grid=10000.0, house=12000.0, tesla=11000.0)
+@example(solar=0.0, battery=0.0, grid=0.0, house=0.0, tesla=0.0, aircon=0.0)
+@example(solar=6500.0, battery=-5000.0, grid=-6000.0, house=0.0, tesla=0.0, aircon=0.0)
+@example(solar=0.0, battery=5000.0, grid=10000.0, house=12000.0, tesla=11000.0, aircon=0.0)
 @SETTINGS
-def test_every_flow_non_negative(solar, battery, grid, house, tesla):
-    for k, v in decompose(solar, battery, grid, house, tesla).items():
+def test_every_flow_non_negative(solar, battery, grid, house, tesla, aircon):
+    for k, v in decompose(solar, battery, grid, house, tesla, aircon).items():
         assert v >= 0.0, "%s = %r" % (k, v)
 
 
 @given(**WILD)
 @FEW
-def test_every_flow_non_negative_on_wild_input(solar, battery, grid, house, tesla):
+def test_every_flow_non_negative_on_wild_input(solar, battery, grid, house, tesla, aircon):
     """Negative solar, negative house, negative tesla, 90 kW magnitudes."""
     try:
-        f = decompose(solar, battery, grid, house, tesla)
+        f = decompose(solar, battery, grid, house, tesla, aircon)
     except BAD:
         return
     for k, v in f.items():
@@ -452,18 +494,22 @@ def test_every_flow_non_negative_on_wild_input(solar, battery, grid, house, tesl
 
 
 @pytest.mark.parametrize("args", [
-    (0.0, 0.0, 0.0, 0.0, 0.0),
-    (-1.0, 0.0, 0.0, 0.0, 0.0),
-    (0.0, 0.0, 0.0, -1.0, 0.0),
-    (0.0, 0.0, 0.0, 0.0, -1.0),
-    (0.0, 0.0, 0.0, 1e-300, 0.0),
-    (0.0, 0.0, 0.0, 5e-324, 0.0),
-    (5e-324, 5e-324, 5e-324, 5e-324, 5e-324),
-    (1e-300, -1e-300, -1e-300, 1e-300, 1e-300),
-    (6500.0, -5000.0, 10000.0, 0.0, 0.0),
-    (0.0, 5000.0, -6000.0, 12000.0, 12000.0),
-    (0.0, 0.0, -1.0, 0.0, 0.0),
-    (0.0, -1.0, -1.0, 0.0, 0.0),
+    (0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    (-1.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    (0.0, 0.0, 0.0, -1.0, 0.0, 0.0),
+    (0.0, 0.0, 0.0, 0.0, -1.0, 0.0),
+    (0.0, 0.0, 0.0, 0.0, 0.0, -1.0),
+    (0.0, 0.0, 0.0, 1e-300, 0.0, 0.0),
+    (0.0, 0.0, 0.0, 5e-324, 0.0, 5e-324),
+    (5e-324, 5e-324, 5e-324, 5e-324, 5e-324, 5e-324),
+    (1e-300, -1e-300, -1e-300, 1e-300, 1e-300, 1e-300),
+    (6500.0, -5000.0, 10000.0, 0.0, 0.0, 0.0),
+    (0.0, 5000.0, -6000.0, 12000.0, 12000.0, 12000.0),
+    (0.0, 0.0, -1.0, 0.0, 0.0, 0.0),
+    (0.0, -1.0, -1.0, 0.0, 0.0, 0.0),
+    # Tesla and air con both over-reading the load at once: the two clamps have
+    # to compose, or Hr goes negative and the House ribbon inverts.
+    (3000.0, 0.0, 0.0, 1000.0, 900.0, 900.0),
 ])
 def test_non_negative_on_pathological_inputs(args):
     try:
@@ -487,97 +533,100 @@ def test_the_v1_nanowatt_hole_is_closed():
 
     v1: `decompose(0, 0, 0, 1e-9)` produced a non-zero solar flow because the
     over-spend trim was guarded by `over > _EPS` and 1e-9 sat on the boundary.
-    Nothing is supplying anything here, so every one of the twelve must be
+    Nothing is supplying anything here, so every one of the fifteen must be
     literally zero.
     """
-    f = decompose(0.0, 0.0, 0.0, 1e-9, 0.0)
+    f = decompose(0.0, 0.0, 0.0, 1e-9, 0.0, 0.0)
     assert all(v == 0.0 for v in f.values()), {k: v for k, v in f.items() if v}
 
 
 @pytest.mark.parametrize("house", [0.0, 5e-324, 1e-320, 1e-300, 1e-9, 1e-6, 1.0, 1e4])
 @pytest.mark.parametrize("tesla", [0.0, 5e-324, 1e-9, 1.0])
-def test_zero_supply_gives_exactly_zero_everywhere(house, tesla):
+@pytest.mark.parametrize("aircon", [0.0, 5e-324, 1e-9, 1.0])
+def test_zero_supply_gives_exactly_zero_everywhere(house, tesla, aircon):
     """No source at all. Any non-zero flow is fabricated energy."""
-    f = decompose(0.0, 0.0, 0.0, house, tesla)
+    f = decompose(0.0, 0.0, 0.0, house, tesla, aircon)
     for k, v in f.items():
         assert v == 0.0, "%s = %.17g with no source at all" % (k, v)
 
 
 @given(house=st.floats(0.0, 12000.0, allow_nan=False, allow_infinity=False),
-       tesla=st.floats(0.0, 12000.0, allow_nan=False, allow_infinity=False))
+       tesla=st.floats(0.0, 12000.0, allow_nan=False, allow_infinity=False),
+       aircon=st.floats(0.0, 12000.0, allow_nan=False, allow_infinity=False))
 @SETTINGS
-def test_zero_supply_gives_exactly_zero_everywhere_property(house, tesla):
-    f = decompose(0.0, 0.0, 0.0, house, tesla)
+def test_zero_supply_gives_exactly_zero_everywhere_property(house, tesla, aircon):
+    f = decompose(0.0, 0.0, 0.0, house, tesla, aircon)
     assert all(v == 0.0 for v in f.values())
 
 
 @given(battery=st.floats(0.0, 5000.0, allow_nan=False, allow_infinity=False),
-       grid=GRID, house=HOUSE, tesla=TESLA)
-@example(battery=0.0, grid=0.0, house=0.0, tesla=0.0)
-@example(battery=5e-324, grid=1e-320, house=1e-300, tesla=0.0)
-@example(battery=0.0, grid=-1e-9, house=1e-9, tesla=0.0)
+       grid=GRID, house=HOUSE, tesla=TESLA, aircon=AIRCON)
+@example(battery=0.0, grid=0.0, house=0.0, tesla=0.0, aircon=0.0)
+@example(battery=5e-324, grid=1e-320, house=1e-300, tesla=0.0, aircon=5e-324)
+@example(battery=0.0, grid=-1e-9, house=1e-9, tesla=0.0, aircon=1e-9)
 @SETTINGS
-def test_zero_solar_means_exactly_zero_solar_flows(battery, grid, house, tesla):
+def test_zero_solar_means_exactly_zero_solar_flows(battery, grid, house, tesla,
+                                                   aircon):
     """Every scale, including denormals. Crediting a source reading 0 W is a lie
     even where the card would clamp it away."""
-    f = decompose(0.0, battery, grid, house, tesla)
+    f = decompose(0.0, battery, grid, house, tesla, aircon)
     for k, v in f.items():
         if k.startswith("solar_to_"):
             assert v == 0.0, "%s = %.17g while solar reads 0" % (k, v)
 
 
 @given(**BASE)
-@example(solar=0.0, battery=0.0, grid=-1000.0, house=0.0, tesla=0.0)
-@example(solar=0.0, battery=-5000.0, grid=-6000.0, house=0.0, tesla=0.0)
-@example(solar=0.0, battery=-2.0, grid=-2.0, house=0.0, tesla=0.0)
+@example(solar=0.0, battery=0.0, grid=-1000.0, house=0.0, tesla=0.0, aircon=0.0)
+@example(solar=0.0, battery=-5000.0, grid=-6000.0, house=0.0, tesla=0.0, aircon=0.0)
+@example(solar=0.0, battery=-2.0, grid=-2.0, house=0.0, tesla=0.0, aircon=0.0)
 @SETTINGS
 def test_zero_solar_exports_exactly_zero_whatever_the_meter_says(
-        solar, battery, grid, house, tesla):
+        solar, battery, grid, house, tesla, aircon):
     """A discharging battery plus a metered export must NOT produce an export
     ribbon. Battery -> grid is structurally forbidden; export is solar-only."""
-    f = decompose(0.0, battery, grid, house, tesla)
+    f = decompose(0.0, battery, grid, house, tesla, aircon)
     assert f["solar_to_export"] == 0.0
 
 
 @given(charge=st.floats(0.0, 5000.0, allow_nan=False, allow_infinity=False),
-       solar=SOLAR, grid=GRID, house=HOUSE, tesla=TESLA)
-@example(charge=1e-9, solar=0.0, grid=0.0, house=0.0, tesla=0.0)
+       solar=SOLAR, grid=GRID, house=HOUSE, tesla=TESLA, aircon=AIRCON)
+@example(charge=1e-9, solar=0.0, grid=0.0, house=0.0, tesla=0.0, aircon=0.0)
 @SETTINGS
 def test_battery_never_supplies_anything_while_it_is_charging(
-        charge, solar, grid, house, tesla):
+        charge, solar, grid, house, tesla, aircon):
     """`battery` positive means charging, so B == 0 and the battery is not a
     source at all. Anything leaving Battery-out here is the pack charging
     itself."""
     assume(charge > 0.0)
-    f = decompose(solar, charge, grid, house, tesla)
+    f = decompose(solar, charge, grid, house, tesla, aircon)
     for k, v in f.items():
         if k.startswith("battery_to_"):
             assert v == 0.0, "%s = %.17g while the battery is charging" % (k, v)
 
 
 @given(discharge=st.floats(0.0, 5000.0, allow_nan=False, allow_infinity=False),
-       solar=SOLAR, grid=GRID, house=HOUSE, tesla=TESLA)
+       solar=SOLAR, grid=GRID, house=HOUSE, tesla=TESLA, aircon=AIRCON)
 @SETTINGS
 def test_nothing_charges_the_battery_while_it_is_discharging(
-        discharge, solar, grid, house, tesla):
+        discharge, solar, grid, house, tesla, aircon):
     assume(discharge > 0.0)
-    f = decompose(solar, -discharge, grid, house, tesla)
+    f = decompose(solar, -discharge, grid, house, tesla, aircon)
     assert f["solar_to_battery"] == 0.0
     assert f["grid_to_battery"] == 0.0
 
 
 @given(**BASE)
 @SETTINGS
-def test_no_export_flow_while_importing(solar, battery, grid, house, tesla):
+def test_no_export_flow_while_importing(solar, battery, grid, house, tesla, aircon):
     assume(grid > 0.0)
-    assert decompose(solar, battery, grid, house, tesla)["solar_to_export"] == 0.0
+    assert decompose(solar, battery, grid, house, tesla, aircon)["solar_to_export"] == 0.0
 
 
 @given(**BASE)
 @SETTINGS
-def test_no_grid_source_flow_while_exporting(solar, battery, grid, house, tesla):
+def test_no_grid_source_flow_while_exporting(solar, battery, grid, house, tesla, aircon):
     assume(grid < 0.0)
-    f = decompose(solar, battery, grid, house, tesla)
+    f = decompose(solar, battery, grid, house, tesla, aircon)
     for k, v in f.items():
         if k.startswith("grid_to_"):
             assert v == 0.0, "%s = %.17g while the meter reads export" % (k, v)
@@ -603,32 +652,33 @@ def test_source_conservation_is_exact_when_well_conditioned(args):
 @given(**BASE)
 @SETTINGS
 def test_source_conservation_exact_whenever_the_regime_conditions_hold(
-        solar, battery, grid, house, tesla):
+        solar, battery, grid, house, tesla, aircon):
     """Same claim, reached from an unstructured draw rather than a built-forward
     one, so a bug that only survives `consistent()`'s shape is still caught."""
-    assume(well_conditioned(solar, battery, grid, house, tesla))
-    p = parts(solar, battery, grid, house, tesla)
-    f = decompose(solar, battery, grid, house, tesla)
+    assume(well_conditioned(solar, battery, grid, house, tesla, aircon))
+    p = parts(solar, battery, grid, house, tesla, aircon)
+    f = decompose(solar, battery, grid, house, tesla, aircon)
     _assert_close(_outbound(f, "solar"), p["S"], "solar outbound")
     _assert_close(_outbound(f, "battery"), p["B"], "battery outbound")
     _assert_close(_outbound(f, "grid"), p["G"], "grid outbound")
 
 
 @given(**BASE)
-@example(solar=0.0, battery=0.0, grid=0.0, house=0.0, tesla=0.0)
-@example(solar=3000.0, battery=-500.0, grid=-200.0, house=2000.0, tesla=800.0)
+@example(solar=0.0, battery=0.0, grid=0.0, house=0.0, tesla=0.0, aircon=0.0)
+@example(solar=3000.0, battery=-500.0, grid=-200.0, house=2000.0, tesla=800.0, aircon=0.0)
 @SETTINGS
-def test_sink_conservation_is_exact_for_the_four_shared_sinks(
-        solar, battery, grid, house, tesla):
-    """House, Tesla, Battery-in and Inverter are filled by the SAME three shares,
-    which sum to 1, so they fill exactly in EVERY regime -- including the two
-    where source conservation breaks. If this ever fails, the shares no longer
-    sum to 1 and the whole rule is unsound."""
-    p = parts(solar, battery, grid, house, tesla)
+def test_sink_conservation_is_exact_for_the_five_shared_sinks(
+        solar, battery, grid, house, tesla, aircon):
+    """House, Tesla, Air con, Battery-in and Inverter are filled by the SAME
+    three shares, which sum to 1, so they fill exactly in EVERY regime --
+    including the two where source conservation breaks. If this ever fails, the
+    shares no longer sum to 1 and the whole rule is unsound."""
+    p = parts(solar, battery, grid, house, tesla, aircon)
     assume(p["den"] > 0.0)
-    f = decompose(solar, battery, grid, house, tesla)
+    f = decompose(solar, battery, grid, house, tesla, aircon)
     _assert_close(_inbound(f, "house"), p["Hr"], "House inbound")
     _assert_close(_inbound(f, "tesla"), p["T"], "Tesla inbound")
+    _assert_close(_inbound(f, "aircon"), p["A"], "Air con inbound")
     _assert_close(_inbound(f, "battery"), p["C"], "Battery-in inbound")
     _assert_close(_inbound(f, "inverter"), p["L"], "Inverter inbound")
 
@@ -636,24 +686,24 @@ def test_sink_conservation_is_exact_for_the_four_shared_sinks(
 @given(**BASE)
 @SETTINGS
 def test_export_sink_is_exactly_filled_when_solar_can_cover_it(
-        solar, battery, grid, house, tesla):
-    p = parts(solar, battery, grid, house, tesla)
+        solar, battery, grid, house, tesla, aircon):
+    p = parts(solar, battery, grid, house, tesla, aircon)
     assume(p["E"] <= p["S"])
-    f = decompose(solar, battery, grid, house, tesla)
+    f = decompose(solar, battery, grid, house, tesla, aircon)
     _assert_close(f["solar_to_export"], p["E"], "Export inbound")
 
 
 @given(**BASE)
-@example(solar=0.0, battery=-3000.0, grid=-2000.0, house=0.0, tesla=0.0)
+@example(solar=0.0, battery=-3000.0, grid=-2000.0, house=0.0, tesla=0.0, aircon=0.0)
 @SETTINGS
 def test_export_is_starved_by_exactly_the_shortfall_when_solar_cannot_cover_it(
-        solar, battery, grid, house, tesla):
+        solar, battery, grid, house, tesla, aircon):
     """Regime 1, pinned in the honest direction: Export shows the whole metered
     export as its node state but is fed only `S`. The gap is exactly E-S -- not
     more (which would mean another source snuck in) and not less."""
-    p = parts(solar, battery, grid, house, tesla)
+    p = parts(solar, battery, grid, house, tesla, aircon)
     assume(p["E"] > p["S"])
-    f = decompose(solar, battery, grid, house, tesla)
+    f = decompose(solar, battery, grid, house, tesla, aircon)
     _assert_close(f["solar_to_export"], p["S"], "export fed")
     assert f["solar_to_export"] <= p["E"] + FP_ABS
 
@@ -661,12 +711,12 @@ def test_export_is_starved_by_exactly_the_shortfall_when_solar_cannot_cover_it(
 @given(**BASE)
 @SETTINGS
 def test_no_source_is_over_spent_unless_the_sample_says_sinks_beat_sources(
-        solar, battery, grid, house, tesla):
+        solar, battery, grid, house, tesla, aircon):
     """Regime 2 is the ONLY licence to over-spend a source. Anywhere else an
     over-spend is fabricated energy, and the card would not clamp all of it."""
-    p = parts(solar, battery, grid, house, tesla)
+    p = parts(solar, battery, grid, house, tesla, aircon)
     assume(p["L_raw"] >= 0.0)
-    f = decompose(solar, battery, grid, house, tesla)
+    f = decompose(solar, battery, grid, house, tesla, aircon)
     for src, cap in (("solar", p["S"]), ("battery", p["B"]), ("grid", p["G"])):
         got = _outbound(f, src)
         assert got <= cap * (1 + FP_REL) + FP_ABS, (
@@ -676,10 +726,10 @@ def test_no_source_is_over_spent_unless_the_sample_says_sinks_beat_sources(
 @given(**BASE)
 @SETTINGS
 def test_each_individual_flow_is_bounded_by_its_own_source(
-        solar, battery, grid, house, tesla):
-    p = parts(solar, battery, grid, house, tesla)
+        solar, battery, grid, house, tesla, aircon):
+    p = parts(solar, battery, grid, house, tesla, aircon)
     assume(p["L_raw"] >= 0.0)
-    f = decompose(solar, battery, grid, house, tesla)
+    f = decompose(solar, battery, grid, house, tesla, aircon)
     for k, v in f.items():
         cap = {"solar": p["S"], "battery": p["B"], "grid": p["G"]}[k.split("_to_")[0]]
         assert v <= cap * (1 + FP_REL) + FP_ABS, "%s = %.6f > %.6f" % (k, v, cap)
@@ -688,11 +738,11 @@ def test_each_individual_flow_is_bounded_by_its_own_source(
 @given(**BASE)
 @SETTINGS
 def test_each_individual_flow_is_bounded_by_its_own_sink(
-        solar, battery, grid, house, tesla):
-    p = parts(solar, battery, grid, house, tesla)
-    f = decompose(solar, battery, grid, house, tesla)
-    caps = {"house": p["Hr"], "tesla": p["T"], "battery": p["C"],
-            "export": p["E"], "inverter": p["L"]}
+        solar, battery, grid, house, tesla, aircon):
+    p = parts(solar, battery, grid, house, tesla, aircon)
+    f = decompose(solar, battery, grid, house, tesla, aircon)
+    caps = {"house": p["Hr"], "tesla": p["T"], "aircon": p["A"],
+            "battery": p["C"], "export": p["E"], "inverter": p["L"]}
     for k, v in f.items():
         cap = caps[k.split("_to_")[1]]
         assert v <= cap * (1 + FP_REL) + FP_ABS, "%s = %.6f > %.6f" % (k, v, cap)
@@ -721,7 +771,8 @@ def _shares(f, p):
     """
     best, name = 1e-6, None
     for sink, val in (("house", p["Hr"]), ("tesla", p["T"]),
-                      ("battery", p["C"]), ("inverter", p["L"])):
+                      ("aircon", p["A"]), ("battery", p["C"]),
+                      ("inverter", p["L"])):
         if val > best:
             best, name = val, sink
     if name is None:
@@ -735,10 +786,10 @@ def _shares(f, p):
 
 @given(**BASE)
 @SETTINGS
-def test_shares_sum_to_one_when_there_is_supply(solar, battery, grid, house, tesla):
-    p = parts(solar, battery, grid, house, tesla)
+def test_shares_sum_to_one_when_there_is_supply(solar, battery, grid, house, tesla, aircon):
+    p = parts(solar, battery, grid, house, tesla, aircon)
     assume(p["den"] > 0.0)
-    f = decompose(solar, battery, grid, house, tesla)
+    f = decompose(solar, battery, grid, house, tesla, aircon)
     s = _shares(f, p)
     assume(s is not None)
     # Battery-in has no battery inflow, so its recovered shares legitimately sum
@@ -746,23 +797,25 @@ def test_shares_sum_to_one_when_there_is_supply(solar, battery, grid, house, tes
     _assert_close(sum(s.values()), 1.0, "shares", rel=1e-12, abs_=1e-12)
 
 
-@given(house=HOUSE, tesla=TESLA)
+@given(house=HOUSE, tesla=TESLA, aircon=AIRCON)
 @SETTINGS
-def test_shares_are_zero_not_nan_when_supply_is_zero(house, tesla):
+def test_shares_are_zero_not_nan_when_supply_is_zero(house, tesla, aircon):
     """The division guard. Without it `0/0` is a ZeroDivisionError or a NaN, and
     a NaN flow renders the ribbon as nothing while reading as a number."""
-    f = decompose(0.0, 0.0, 0.0, house, tesla)
+    f = decompose(0.0, 0.0, 0.0, house, tesla, aircon)
     for k, v in f.items():
         assert v == 0.0 and not math.isnan(v), "%s = %r" % (k, v)
 
 
 def test_shares_are_proportional_to_the_source_readings():
-    """Two sinks must receive the SAME mix -- that is what 'proportional' means
-    and what makes the rule order-free. A rule that fed one sink preferentially
-    would pass conservation and fail here."""
-    # 2 kW solar, 1 kW battery out, 1 kW import; no export; house 1 kW, tesla 3 kW.
-    f = decompose(2000.0, -1000.0, 1000.0, 4000.0, 3000.0)
-    for sink in ("house", "tesla"):
+    """Three sinks must receive the SAME mix -- that is what 'proportional'
+    means and what makes the rule order-free. A rule that fed one sink
+    preferentially would pass conservation and fail here."""
+    # 2 kW solar, 1 kW battery out, 1 kW import; no export. A 4 kW house load
+    # splitting as 2 kW car, 1 kW air con, 1 kW rest -- three sinks drawing the
+    # identical 0.5 / 0.25 / 0.25 mix.
+    f = decompose(2000.0, -1000.0, 1000.0, 4000.0, 2000.0, 1000.0)
+    for sink in ("house", "tesla", "aircon"):
         tot = _inbound(f, sink)
         assert tot > 0
         _assert_close(f["solar_to_%s" % sink] / tot, 0.5, "solar share of %s" % sink,
@@ -782,7 +835,7 @@ def test_export_is_removed_from_solar_before_the_shares_are_taken():
     it. Skip step 1 and the share becomes 3000/4000, putting 1875 W of solar on
     the house -- a 12% overstatement that no other test here would catch.
     """
-    f = decompose(3000.0, -1000.0, -1000.0, 2500.0, 0.0)
+    f = decompose(3000.0, -1000.0, -1000.0, 2500.0, 0.0, 0.0)
     _assert_close(f["solar_to_export"], 1000.0, "export")
     _assert_close(f["solar_to_house"], 2500.0 * 2.0 / 3.0, "solar_to_house")
     _assert_close(f["battery_to_house"], 2500.0 / 3.0, "battery_to_house")
@@ -795,10 +848,11 @@ def test_export_is_removed_from_solar_before_the_shares_are_taken():
 
 @given(x=st.floats(0.0, 5000.0, allow_nan=False, allow_infinity=False),
        y=st.floats(0.0, 5000.0, allow_nan=False, allow_infinity=False),
-       solar=SOLAR, house=HOUSE, tesla=TESLA)
-@example(x=1000.0, y=4000.0, solar=0.0, house=5000.0, tesla=0.0)
+       solar=SOLAR, house=HOUSE, tesla=TESLA, aircon=AIRCON)
+@example(x=1000.0, y=4000.0, solar=0.0, house=5000.0, tesla=0.0, aircon=0.0)
 @SETTINGS
-def test_battery_and_grid_are_interchangeable_sources(x, y, solar, house, tesla):
+def test_battery_and_grid_are_interchangeable_sources(x, y, solar, house, tesla,
+                                                      aircon):
     """Relabelling battery-out as grid-import and vice versa must permute the
     answer and change nothing else. A sequential allocator cannot do this: it
     spends whichever it reaches first.
@@ -806,29 +860,29 @@ def test_battery_and_grid_are_interchangeable_sources(x, y, solar, house, tesla)
     Restricted to grid >= 0 so the export step, which is solar-specific and
     genuinely asymmetric, is out of the picture.
     """
-    a = decompose(solar, -x, y, house, tesla)
-    b = decompose(solar, -y, x, house, tesla)
-    for sink in ("house", "tesla", "inverter"):
+    a = decompose(solar, -x, y, house, tesla, aircon)
+    b = decompose(solar, -y, x, house, tesla, aircon)
+    for sink in ("house", "tesla", "aircon", "inverter"):
         _assert_close(a["battery_to_%s" % sink], b["grid_to_%s" % sink],
                       "battery/grid swap on %s" % sink)
         _assert_close(a["grid_to_%s" % sink], b["battery_to_%s" % sink],
                       "grid/battery swap on %s" % sink)
-    for k in ("solar_to_house", "solar_to_tesla", "solar_to_battery",
-              "solar_to_export", "solar_to_inverter"):
+    for k in ("solar_to_house", "solar_to_tesla", "solar_to_aircon",
+              "solar_to_battery", "solar_to_export", "solar_to_inverter"):
         _assert_close(a[k], b[k], "solar unchanged: %s" % k)
 
 
 @given(x=st.floats(0.0, 5000.0, allow_nan=False, allow_infinity=False),
        y=st.floats(0.0, 5000.0, allow_nan=False, allow_infinity=False),
-       house=HOUSE, tesla=TESLA)
+       house=HOUSE, tesla=TESLA, aircon=AIRCON)
 @SETTINGS
 def test_solar_and_battery_are_interchangeable_when_nothing_is_exported(
-        x, y, house, tesla):
+        x, y, house, tesla, aircon):
     """With the meter at zero there is no export step, so solar has no special
     status left and must be exactly as interchangeable as the other two."""
-    a = decompose(x, -y, 0.0, house, tesla)
-    b = decompose(y, -x, 0.0, house, tesla)
-    for sink in ("house", "tesla", "inverter"):
+    a = decompose(x, -y, 0.0, house, tesla, aircon)
+    b = decompose(y, -x, 0.0, house, tesla, aircon)
+    for sink in ("house", "tesla", "aircon", "inverter"):
         _assert_close(a["solar_to_%s" % sink], b["battery_to_%s" % sink],
                       "solar/battery swap on %s" % sink)
         _assert_close(a["battery_to_%s" % sink], b["solar_to_%s" % sink],
@@ -837,20 +891,30 @@ def test_solar_and_battery_are_interchangeable_when_nothing_is_exported(
 
 @given(**BASE)
 @SETTINGS
-def test_house_and_tesla_are_interchangeable_sinks(solar, battery, grid, house, tesla):
+def test_house_and_tesla_are_interchangeable_sinks(
+        solar, battery, grid, house, tesla, aircon):
     """The rule must not privilege one sink over another either. Swapping the
     split of the same total house load between Tesla and the rest must swap the
-    two columns and leave every other flow identical."""
-    assume(tesla <= house)
-    rest = house - tesla
-    a = decompose(solar, battery, grid, house, tesla)
-    b = decompose(solar, battery, grid, house, rest)
+    two columns and leave every other flow identical -- the three air-con flows
+    included, since A is the same in both samples.
+
+    `tesla + aircon <= house` is what makes the swap well defined once a third
+    slice exists: it keeps A un-clamped in sample `a` (A == aircon), and in
+    sample `b` the car is given Hr == house - tesla - aircon, which leaves
+    `house - Hr == tesla + aircon >= aircon`, so A is un-clamped there too and
+    Hr' comes back out as exactly `tesla`.
+    """
+    assume(tesla + aircon <= house)
+    rest = house - tesla - aircon
+    a = decompose(solar, battery, grid, house, tesla, aircon)
+    b = decompose(solar, battery, grid, house, rest, aircon)
     for src in SOURCES:
         _assert_close(a["%s_to_house" % src], b["%s_to_tesla" % src],
                       "house/tesla swap from %s" % src)
         _assert_close(a["%s_to_tesla" % src], b["%s_to_house" % src],
                       "tesla/house swap from %s" % src)
-    for k in ("solar_to_export", "solar_to_battery", "grid_to_battery",
+    for k in ("solar_to_aircon", "battery_to_aircon", "grid_to_aircon",
+              "solar_to_export", "solar_to_battery", "grid_to_battery",
               "solar_to_inverter", "battery_to_inverter", "grid_to_inverter"):
         _assert_close(a[k], b[k], "unchanged: %s" % k)
 
@@ -862,7 +926,8 @@ def test_house_and_tesla_are_interchangeable_sinks(solar, battery, grid, house, 
 @pytest.mark.parametrize("k", [0.5, 2.0, 4.0, 0.25, 8.0, 2.0 ** -8])
 @given(**SCALED)
 @FEW
-def test_scaling_is_bit_exact_for_powers_of_two(k, solar, battery, grid, house, tesla):
+def test_scaling_is_bit_exact_for_powers_of_two(
+        k, solar, battery, grid, house, tesla, aircon):
     """v2 has no fitted constants and no fixed term, so it is positively
     homogeneous of degree 1. For a power-of-two k every operation in the rule
     commutes with the scaling exactly, so this is `==`, not `isclose`.
@@ -870,7 +935,7 @@ def test_scaling_is_bit_exact_for_powers_of_two(k, solar, battery, grid, house, 
     Any fixed watt offset anywhere in the rule -- a parasitic term, an epsilon
     floor, a rounding-to-zero threshold -- breaks this test immediately.
     """
-    args = (solar, battery, grid, house, tesla)
+    args = (solar, battery, grid, house, tesla, aircon)
     scaled = tuple(k * a for a in args)
     assume(max(abs(x) for x in scaled) <= MAX_PLAUSIBLE_W * 0.9)
     a = decompose(*args)
@@ -883,9 +948,9 @@ def test_scaling_is_bit_exact_for_powers_of_two(k, solar, battery, grid, house, 
 @given(k=st.floats(1e-2, 10.0, allow_nan=False, allow_infinity=False), **SCALED)
 @FEW
 def test_scaling_is_homogeneous_for_arbitrary_positive_k(
-        k, solar, battery, grid, house, tesla):
+        k, solar, battery, grid, house, tesla, aircon):
     assume(k > 0)
-    args = (solar, battery, grid, house, tesla)
+    args = (solar, battery, grid, house, tesla, aircon)
     assume(max(abs(k * x) for x in args) <= MAX_PLAUSIBLE_W * 0.9)
     a = decompose(*args)
     b = decompose(*(k * x for x in args))
@@ -901,11 +966,11 @@ def test_a_fixed_offset_would_be_caught_by_the_homogeneity_test():
     reference (v1's `0.9974*DC - 105.9` shape) and asserts it does NOT hold. If
     this ever passes, the homogeneity test has stopped discriminating.
     """
-    def affine(solar, battery, grid, house, tesla):
-        f = reference(solar, battery, grid, house, tesla)
+    def affine(solar, battery, grid, house, tesla, aircon):
+        f = reference(solar, battery, grid, house, tesla, aircon)
         return {k: max(0.0, 0.9974 * v - 105.9) for k, v in f.items()}
 
-    args = (3000.0, -1000.0, 500.0, 2500.0, 800.0)
+    args = (3000.0, -1000.0, 500.0, 2500.0, 800.0, 400.0)
     a = affine(*args)
     b = affine(*(2.0 * x for x in args))
     assert any(b[k] != 2.0 * a[k] for k in KEYS)
@@ -917,59 +982,79 @@ def test_a_fixed_offset_would_be_caught_by_the_homogeneity_test():
 
 @given(house=st.floats(0.0, 12000.0, allow_nan=False, allow_infinity=False),
        over=st.floats(0.0, 20000.0, allow_nan=False, allow_infinity=False),
-       solar=SOLAR, battery=BATTERY, grid=GRID)
-@example(house=1000.0, over=9000.0, solar=0.0, battery=0.0, grid=1000.0)
+       solar=SOLAR, battery=BATTERY, grid=GRID, aircon=AIRCON)
+@example(house=1000.0, over=9000.0, solar=0.0, battery=0.0, grid=1000.0,
+         aircon=0.0)
+@example(house=1000.0, over=9000.0, solar=0.0, battery=0.0, grid=1000.0,
+         aircon=5000.0)
 @SETTINGS
 def test_tesla_above_house_load_is_clamped_and_leaves_house_at_exactly_zero(
-        house, over, solar, battery, grid):
+        house, over, solar, battery, grid, aircon):
     """TeslaMate publishes on change and holds a plateau for up to ~80 min, so a
     held value can outrun a freshly-polled house_load. Unclamped, Hr goes
-    negative and the House ribbon inverts."""
+    negative and the House ribbon inverts.
+
+    Air con is drawn as well, and the air-con assertion is the new half: T is
+    taken first, so once the car alone covers the load there is nothing left for
+    A either, however large the LG counter's derivative happens to be.
+    """
     assume(over > 0.0)
-    f = decompose(solar, battery, grid, house, house + over)
+    f = decompose(solar, battery, grid, house, house + over, aircon)
     assert _inbound(f, "house") == 0.0, (
         "House got %.17g while Tesla alone exceeded the load"
         % _inbound(f, "house"))
+    assert _inbound(f, "aircon") == 0.0, (
+        "Air con got %.17g while Tesla alone exceeded the load"
+        % _inbound(f, "aircon"))
     assert _inbound(f, "tesla") <= house * (1 + FP_REL) + FP_ABS
 
 
 @given(house=st.floats(0.0, 12000.0, allow_nan=False, allow_infinity=False),
-       solar=SOLAR, battery=BATTERY, grid=GRID)
+       solar=SOLAR, battery=BATTERY, grid=GRID, aircon=AIRCON)
 @SETTINGS
 def test_tesla_equal_to_house_load_leaves_house_at_exactly_zero(
-        house, solar, battery, grid):
-    f = decompose(solar, battery, grid, house, house)
+        house, solar, battery, grid, aircon):
+    f = decompose(solar, battery, grid, house, house, aircon)
     assert _inbound(f, "house") == 0.0
     for src in SOURCES:
         assert f["%s_to_house" % src] == 0.0
+        assert f["%s_to_aircon" % src] == 0.0
 
 
 @given(**BASE)
 @SETTINGS
 def test_tesla_never_receives_more_than_the_house_load(
-        solar, battery, grid, house, tesla):
-    f = decompose(solar, battery, grid, house, tesla)
+        solar, battery, grid, house, tesla, aircon):
+    f = decompose(solar, battery, grid, house, tesla, aircon)
     assert _inbound(f, "tesla") <= max(0.0, house) * (1 + FP_REL) + FP_ABS
 
 
 @given(**BASE)
 @SETTINGS
 def test_house_plus_tesla_never_exceeds_the_house_load(
-        solar, battery, grid, house, tesla):
+        solar, battery, grid, house, tesla, aircon):
     """The whole point of splitting Tesla out: the two together are still the
-    one metered load, never more."""
-    f = decompose(solar, battery, grid, house, tesla)
+    one metered load, never more. With a third slice carved out of the same
+    load the stronger statement is that all THREE together never exceed it, and
+    both are asserted -- the two-way bound is the one that survives if air con
+    is ever dropped again."""
+    f = decompose(solar, battery, grid, house, tesla, aircon)
     total = _inbound(f, "house") + _inbound(f, "tesla")
     assert total <= max(0.0, house) * (1 + FP_REL) + FP_ABS, (
         "House %.6f + Tesla %.6f > load %.6f"
         % (_inbound(f, "house"), _inbound(f, "tesla"), house))
+    with_ac = total + _inbound(f, "aircon")
+    assert with_ac <= max(0.0, house) * (1 + FP_REL) + FP_ABS, (
+        "House %.6f + Tesla %.6f + Air con %.6f > load %.6f"
+        % (_inbound(f, "house"), _inbound(f, "tesla"),
+           _inbound(f, "aircon"), house))
 
 
 def test_tesla_held_flat_across_a_long_plateau_is_treated_as_a_real_reading():
     """CLAUDE.md: a held TeslaMate value is correct, not stale. The same
     (house, tesla) pair repeated must decompose identically every time -- there
     must be no age-based decay or staleness heuristic hiding in here."""
-    args = (0.0, 0.0, 7200.0, 7400.0, 7000.0)
+    args = (0.0, 0.0, 7200.0, 7400.0, 7000.0, 200.0)
     first = decompose(*args)
     for _ in range(500):
         assert decompose(*args) == first
@@ -980,13 +1065,160 @@ def test_unusable_tesla_reading_raises_rather_than_becoming_zero(bad):
     """A zeroed Tesla silently moves ~7 kW into 'Rest of house' and looks
     entirely plausible. It must not be indistinguishable from an unplugged car."""
     with pytest.raises(BAD):
-        decompose(3000.0, -500.0, 1000.0, 7400.0, bad)
+        decompose(3000.0, -500.0, 1000.0, 7400.0, bad, 0.0)
 
 
 def test_tesla_zero_puts_the_whole_load_on_house():
-    f = decompose(0.0, 0.0, 1000.0, 900.0, 0.0)
+    f = decompose(0.0, 0.0, 1000.0, 900.0, 0.0, 0.0)
     assert _inbound(f, "tesla") == 0.0
     _assert_close(_inbound(f, "house"), 900.0, "house")
+
+
+# ===========================================================================
+# 8b. Air con -- the sixth channel
+#
+# A = min(aircon, house_load - T), carved out AFTER the Tesla. Everything here
+# would pass vacuously if the channel were wired up as a constant zero, so each
+# test drives a non-zero air-con reading and pins a number only the real clamp
+# order can produce.
+# ===========================================================================
+
+@given(**BASE)
+@example(solar=3000.0, battery=-1000.0, grid=1000.0, house=4000.0, tesla=1000.0,
+         aircon=1500.0)
+@example(solar=0.0, battery=0.0, grid=0.0, house=0.0, tesla=0.0, aircon=0.0)
+@SETTINGS
+def test_the_air_con_sink_is_filled_exactly_by_its_three_inbound_flows(
+        solar, battery, grid, house, tesla, aircon):
+    """Air con is filled by the same three shares as House and Tesla, so like
+    them it fills EXACTLY in every regime -- the two where source conservation
+    breaks included."""
+    p = parts(solar, battery, grid, house, tesla, aircon)
+    assume(p["den"] > 0.0)
+    f = decompose(solar, battery, grid, house, tesla, aircon)
+    _assert_close(_inbound(f, "aircon"), p["A"], "Air con inbound")
+    _assert_close(f["solar_to_aircon"] + f["battery_to_aircon"]
+                  + f["grid_to_aircon"], p["A"], "the three air-con flows")
+
+
+@given(**BASE)
+@SETTINGS
+def test_the_air_con_clamp_keeps_the_rest_of_the_house_non_negative(
+        solar, battery, grid, house, tesla, aircon):
+    """A is clamped to `house - T`, which is what makes Hr >= 0 STRUCTURAL
+    rather than a second guard. Unclamped, an air-con reading larger than what
+    the car left would invert the House ribbon exactly as an unclamped Tesla
+    reading would."""
+    f = decompose(solar, battery, grid, house, tesla, aircon)
+    assert _inbound(f, "house") >= 0.0
+    assert _inbound(f, "aircon") <= max(0.0, house) * (1 + FP_REL) + FP_ABS
+    assert (_inbound(f, "tesla") + _inbound(f, "aircon")
+            <= max(0.0, house) * (1 + FP_REL) + FP_ABS)
+
+
+@pytest.mark.parametrize("over", [1e-9, 1.0, 250.0, 9000.0])
+def test_air_con_above_what_the_tesla_left_is_absorbed_by_the_clamp(over):
+    """Not fabricated flow, and not a negative House. The LG channel is a
+    derivative of an hourly energy counter describing the hour that has just
+    finished, so it lags the 10 s house_load by up to an hour and WILL out-read
+    what is left on some samples. Air con gets exactly `house - tesla`, House
+    gets exactly zero, and nothing appears from nowhere."""
+    house, tesla = 4000.0, 1000.0
+    f = decompose(0.0, 0.0, 5000.0, house, tesla, house - tesla + over)
+    _assert_close(_inbound(f, "aircon"), house - tesla, "Air con inbound")
+    assert _inbound(f, "house") == 0.0
+    _assert_close(_inbound(f, "tesla"), tesla, "Tesla inbound")
+    _assert_close(_inbound(f, "house") + _inbound(f, "tesla")
+                  + _inbound(f, "aircon"), house, "the whole load")
+
+
+def test_the_tesla_is_carved_out_before_the_air_con():
+    """The order of the two clamps, pinned on a sample only one order explains.
+
+    1 kW of load with both channels reading 800 W. Tesla first gives T = 800,
+    A = 200. Air con first would give A = 800, T = 200. Both orders fill the
+    load exactly, so only this asymmetric fixture can tell them apart -- and the
+    order is what licenses `*_to_tesla` being blind to `aircon`.
+    """
+    f = decompose(0.0, 0.0, 1000.0, 1000.0, 800.0, 800.0)
+    _assert_close(_inbound(f, "tesla"), 800.0, "Tesla inbound")
+    _assert_close(_inbound(f, "aircon"), 200.0, "Air con inbound")
+    assert _inbound(f, "house") == 0.0
+
+
+@given(**BASE)
+@SETTINGS
+def test_raising_air_con_moves_load_from_house_and_touches_nothing_else(
+        solar, battery, grid, house, tesla, aircon):
+    """The property that would fail if A were taken out of the wrong place.
+
+    Raising the air-con reading may only move energy along the House -> Air con
+    boundary: Tesla, Battery-in and Export are bit-identical, because none of
+    them reads any part of the house split at all.
+
+    FINDING, measured rather than assumed: the three `*_to_inverter` flows are
+    NOT bit-identical, and cannot be. `Hr + T + A == house` holds in exact
+    arithmetic, but flows.py sums the residual from the parts --
+    `(house - T - A) + T + A` -- and that round-trip loses up to an ulp. Moving
+    the air-con reading by 250 W was measured shifting `grid_to_inverter` by
+    9.1e-13 W. That is a rounding artifact of the sum order and not a real
+    dependency, which is exactly why DEPENDS_ON can honestly call the Inverter
+    node blind to `aircon` and why the empirical dependency check downstream
+    uses a 1e-9 threshold rather than equality. Held here to floating-point
+    slack -- a watt of movement would still fail.
+    """
+    a = decompose(solar, battery, grid, house, tesla, aircon)
+    b = decompose(solar, battery, grid, house, tesla, aircon + 250.0)
+    for k in ("solar_to_tesla", "battery_to_tesla", "grid_to_tesla",
+              "solar_to_battery", "grid_to_battery", "solar_to_export"):
+        assert a[k] == b[k], "%s moved with the air-con reading: %r -> %r" % (
+            k, a[k], b[k])
+    for k in ("solar_to_inverter", "battery_to_inverter", "grid_to_inverter"):
+        _assert_close(a[k], b[k], "%s moved with the air-con reading" % k)
+    _assert_close(_inbound(a, "house") + _inbound(a, "aircon"),
+                  _inbound(b, "house") + _inbound(b, "aircon"),
+                  "House + Air con is invariant in the air-con reading")
+    assert _inbound(b, "aircon") >= _inbound(a, "aircon") - FP_ABS
+    assert _inbound(b, "house") <= _inbound(a, "house") + FP_ABS
+
+
+@given(**BASE)
+@SETTINGS
+def test_house_rest_and_air_con_are_interchangeable_sinks(
+        solar, battery, grid, house, tesla, aircon):
+    """Order-freeness for the new sink. Swapping the split of the same load
+    between Air con and the rest of the house must swap those two columns and
+    leave everything else identical."""
+    assume(tesla + aircon <= house)
+    rest = house - tesla - aircon
+    a = decompose(solar, battery, grid, house, tesla, aircon)
+    b = decompose(solar, battery, grid, house, tesla, rest)
+    for src in SOURCES:
+        _assert_close(a["%s_to_house" % src], b["%s_to_aircon" % src],
+                      "house/aircon swap from %s" % src)
+        _assert_close(a["%s_to_aircon" % src], b["%s_to_house" % src],
+                      "aircon/house swap from %s" % src)
+    for k in ("solar_to_tesla", "battery_to_tesla", "grid_to_tesla",
+              "solar_to_export", "solar_to_battery", "grid_to_battery",
+              "solar_to_inverter", "battery_to_inverter", "grid_to_inverter"):
+        _assert_close(a[k], b[k], "unchanged: %s" % k)
+
+
+@pytest.mark.parametrize("bad", ["unavailable", "unknown", "", None, float("nan")])
+def test_unusable_air_con_reading_raises_rather_than_becoming_zero(bad):
+    """Same ruling as the Tesla channel, and the same reason: a zeroed air con
+    silently moves the whole LG load into 'Rest of house' and looks entirely
+    plausible. The LG integration publishes no power entity at all, so a gap in
+    the hourly counter is the expected failure, not an exotic one."""
+    with pytest.raises(BAD):
+        decompose(3000.0, -500.0, 1000.0, 7400.0, 800.0, bad)
+
+
+def test_air_con_zero_puts_the_whole_remaining_load_on_house():
+    f = decompose(0.0, 0.0, 1000.0, 900.0, 400.0, 0.0)
+    assert _inbound(f, "aircon") == 0.0
+    _assert_close(_inbound(f, "tesla"), 400.0, "tesla")
+    _assert_close(_inbound(f, "house"), 500.0, "house")
 
 
 # ===========================================================================
@@ -995,20 +1227,20 @@ def test_tesla_zero_puts_the_whole_load_on_house():
 
 @given(**BASE)
 @SETTINGS
-def test_inverter_node_is_never_negative(solar, battery, grid, house, tesla):
-    f = decompose(solar, battery, grid, house, tesla)
+def test_inverter_node_is_never_negative(solar, battery, grid, house, tesla, aircon):
+    f = decompose(solar, battery, grid, house, tesla, aircon)
     assert _inbound(f, "inverter") >= 0.0
 
 
 @given(**BASE)
 @SETTINGS
 def test_inverter_node_is_exactly_zero_when_the_sinks_outrun_the_sources(
-        solar, battery, grid, house, tesla):
+        solar, battery, grid, house, tesla, aircon):
     """The `max(0, ...)` clamp. A negative residual means the sample is skewed,
     not that the inverter generated energy."""
-    p = parts(solar, battery, grid, house, tesla)
+    p = parts(solar, battery, grid, house, tesla, aircon)
     assume(p["L_raw"] < 0.0)
-    f = decompose(solar, battery, grid, house, tesla)
+    f = decompose(solar, battery, grid, house, tesla, aircon)
     for src in SOURCES:
         assert f["%s_to_inverter" % src] == 0.0, (
             "%s_to_inverter = %.17g with a negative residual (%.6f)"
@@ -1018,10 +1250,11 @@ def test_inverter_node_is_exactly_zero_when_the_sinks_outrun_the_sources(
 def test_inverter_node_absorbs_import_that_has_nowhere_else_to_go():
     """BRIEF section 2: `decompose(0,0,2,0)` sends 2 kW to Inverter rather than
     into a house drawing nothing. This is the case that dissolved v1's g2h clamp."""
-    f = decompose(0.0, 0.0, 2000.0, 0.0, 0.0)
+    f = decompose(0.0, 0.0, 2000.0, 0.0, 0.0, 0.0)
     _assert_close(f["grid_to_inverter"], 2000.0, "grid_to_inverter")
     assert f["grid_to_house"] == 0.0
     assert f["grid_to_tesla"] == 0.0
+    assert f["grid_to_aircon"] == 0.0
     assert f["grid_to_battery"] == 0.0
 
 
@@ -1030,10 +1263,14 @@ def test_inverter_node_equals_the_measured_residual_on_a_worked_sample():
     solar 2982 DC, battery -457 (457 W out), grid -98 (98 W export), house 3078.
 
         supply = 2982 + 457       = 3439
-        sinks  = 3078 + 98        = 3176      (Hr 2778 + T 300 + E 98)
+        sinks  = 3078 + 98        = 3176      (Hr 2278 + T 300 + A 500 + E 98)
         L      = 3439 - 3176      = 263       -- CLAUDE.md's own 263 W gap.
+
+    The 500 W of air con is new, and it is deliberately inside the same 3078 W
+    house load: carving a third slice out of it must not move the residual by a
+    watt, because L reads the load and never its split.
     """
-    f = decompose(2982.0, -457.0, -98.0, 3078.0, 300.0)
+    f = decompose(2982.0, -457.0, -98.0, 3078.0, 300.0, 500.0)
     _assert_close(_inbound(f, "inverter"), 263.0, "Inverter node", abs_=1e-6)
     _assert_close(f["solar_to_export"], 98.0, "export", abs_=1e-6)
 
@@ -1041,12 +1278,12 @@ def test_inverter_node_equals_the_measured_residual_on_a_worked_sample():
 @given(args=consistent())
 @SETTINGS
 def test_inverter_node_closes_the_balance_exactly(args):
-    """supply - (Hr + T + C + E) == Inverter, with no slack anywhere."""
+    """supply - (Hr + T + A + C + E) == Inverter, with no slack anywhere."""
     p = parts(*args)
     assume(p["L_raw"] >= 0.0)
     f = decompose(*args)
     _assert_close(_inbound(f, "inverter"),
-                  p["supply"] - (p["Hr"] + p["T"] + p["C"] + p["E"]),
+                  p["supply"] - (p["Hr"] + p["T"] + p["A"] + p["C"] + p["E"]),
                   "Inverter node closes the balance")
 
 
@@ -1084,12 +1321,12 @@ BAD_VALUES = [
     "12abc",
 ]
 
-CHANNELS = ("solar", "battery", "grid", "house", "tesla")
-GOOD = (3000.0, -500.0, 1000.0, 2500.0, 800.0)
+CHANNELS = ("solar", "battery", "grid", "house", "tesla", "aircon")
+GOOD = (3000.0, -500.0, 1000.0, 2500.0, 800.0, 600.0)
 
 
 @pytest.mark.parametrize("bad", BAD_VALUES, ids=lambda v: repr(v)[:24])
-@pytest.mark.parametrize("idx", range(5), ids=CHANNELS)
+@pytest.mark.parametrize("idx", range(6), ids=CHANNELS)
 def test_an_unusable_reading_raises_on_every_channel(idx, bad):
     """Raising rather than substituting 0.0 is the whole point. The dominant
     failure mode is Modbus session contention -- one session at a time, so a
@@ -1102,7 +1339,7 @@ def test_an_unusable_reading_raises_on_every_channel(idx, bad):
         decompose(*args)
 
 
-@pytest.mark.parametrize("idx", range(5), ids=CHANNELS)
+@pytest.mark.parametrize("idx", range(6), ids=CHANNELS)
 def test_a_bool_is_not_a_measurement(idx):
     """`bool` is an `int` subclass, so an unguarded `True` decomposes as 1 W."""
     for b in (True, False):
@@ -1112,7 +1349,7 @@ def test_a_bool_is_not_a_measurement(idx):
             decompose(*args)
 
 
-@pytest.mark.parametrize("idx", range(5), ids=CHANNELS)
+@pytest.mark.parametrize("idx", range(6), ids=CHANNELS)
 def test_a_u32_sign_misread_is_rejected_not_clamped(idx):
     """CLAUDE.md records register 33257 read unsigned as 4294967253 W = 2^32-43
     when the truth was -43 W. Clamping would turn 4.29 GW of import into a
@@ -1126,7 +1363,7 @@ def test_a_u32_sign_misread_is_rejected_not_clamped(idx):
         decompose(*args)
 
 
-@pytest.mark.parametrize("idx", range(5), ids=CHANNELS)
+@pytest.mark.parametrize("idx", range(6), ids=CHANNELS)
 def test_the_plausibility_ceiling_is_a_boundary_not_a_gradient(idx):
     """Just inside must work, just outside must raise. A test that only probes
     4.29e9 cannot tell a real ceiling from `abs(v) > 1e300`."""
@@ -1148,16 +1385,16 @@ def test_the_plausibility_ceiling_is_a_boundary_not_a_gradient(idx):
 ])
 def test_numeric_strings_are_the_normal_path(text, value):
     """HA states are always strings. These are not exotic inputs."""
-    assert decompose(text, -500.0, 1000.0, 2500.0, 800.0) == \
-        decompose(value, -500.0, 1000.0, 2500.0, 800.0)
+    assert decompose(text, -500.0, 1000.0, 2500.0, 800.0, 0.0) == \
+        decompose(value, -500.0, 1000.0, 2500.0, 800.0, 0.0)
 
 
 @pytest.mark.parametrize("value", [
     Decimal("3000"), Decimal("3000.5"), Fraction(6000, 2), 3000,
 ])
 def test_exact_numeric_types_decompose_like_their_float(value):
-    assert decompose(value, -500.0, 1000.0, 2500.0, 800.0) == \
-        decompose(float(value), -500.0, 1000.0, 2500.0, 800.0)
+    assert decompose(value, -500.0, 1000.0, 2500.0, 800.0, 0.0) == \
+        decompose(float(value), -500.0, 1000.0, 2500.0, 800.0, 0.0)
 
 
 def test_a_nan_reading_is_not_silently_equal_to_an_idle_night():
@@ -1165,16 +1402,17 @@ def test_a_nan_reading_is_not_silently_equal_to_an_idle_night():
     0.0 because `nan > 0.0` is False -- so without an explicit isnan guard a
     broken sensor decomposes byte-identically to a still night."""
     with pytest.raises(BAD):
-        decompose(float("nan"), 0.0, 0.0, 0.0, 0.0)
+        decompose(float("nan"), 0.0, 0.0, 0.0, 0.0, 0.0)
     with pytest.raises(BAD):
-        decompose(0.0, float("nan"), 0.0, 0.0, 0.0)
+        decompose(0.0, float("nan"), 0.0, 0.0, 0.0, 0.0)
 
 
-@pytest.mark.parametrize("idx", [0, 3, 4], ids=["solar", "house", "tesla"])
+@pytest.mark.parametrize("idx", [0, 3, 4, 5],
+                         ids=["solar", "house", "tesla", "aircon"])
 def test_a_negative_reading_where_none_is_possible_is_handled_without_leaking(idx):
-    """solar, house and tesla cannot be negative. Whatever flows.py chooses to
-    do -- raise, or treat as zero -- it must not half-clamp, which would leave
-    a negative term inside a share and invert a ribbon."""
+    """solar, house, tesla and air con cannot be negative. Whatever flows.py
+    chooses to do -- raise, or treat as zero -- it must not half-clamp, which
+    would leave a negative term inside a share and invert a ribbon."""
     args = list(GOOD)
     args[idx] = -1234.0
     try:
@@ -1187,14 +1425,23 @@ def test_a_negative_reading_where_none_is_possible_is_handled_without_leaking(id
         "a negative %s neither raised nor behaved as 0.0" % CHANNELS[idx])
 
 
-def test_positional_signature_is_solar_battery_grid_house_tesla():
+def test_positional_signature_is_solar_battery_grid_house_tesla_aircon():
     """Argument order is load-bearing: swapping grid and house silently produces
-    a plausible chart. Pinned by a sample only one ordering can explain -- solar
-    5000 exporting 1000 with the house at 500 and no car."""
-    f = decompose(5000.0, 0.0, -1000.0, 500.0, 0.0)
+    a plausible chart. Pinned by samples only one ordering can explain -- solar
+    5000 exporting 1000 with the house at 500, first with no car and no air con,
+    then with the whole 500 W of load being air con, which is the only thing
+    that can distinguish position 6 from position 5."""
+    f = decompose(5000.0, 0.0, -1000.0, 500.0, 0.0, 0.0)
     _assert_close(f["solar_to_export"], 1000.0, "export")
     _assert_close(f["solar_to_house"], 500.0, "house")
     _assert_close(f["solar_to_inverter"], 3500.0, "inverter")
+
+    g = decompose(5000.0, 0.0, -1000.0, 500.0, 0.0, 500.0)
+    _assert_close(g["solar_to_export"], 1000.0, "export")
+    _assert_close(g["solar_to_aircon"], 500.0, "aircon")
+    assert g["solar_to_house"] == 0.0
+    assert g["solar_to_tesla"] == 0.0
+    _assert_close(g["solar_to_inverter"], 3500.0, "inverter")
 
 
 # ===========================================================================
@@ -1202,26 +1449,26 @@ def test_positional_signature_is_solar_battery_grid_house_tesla():
 # ===========================================================================
 
 @given(**BASE)
-@example(solar=2982.0, battery=-457.0, grid=-98.0, house=3078.0, tesla=300.0)
-@example(solar=0.0, battery=0.0, grid=2000.0, house=0.0, tesla=0.0)
-@example(solar=0.0, battery=0.0, grid=0.0, house=0.0, tesla=0.0)
+@example(solar=2982.0, battery=-457.0, grid=-98.0, house=3078.0, tesla=300.0, aircon=0.0)
+@example(solar=0.0, battery=0.0, grid=2000.0, house=0.0, tesla=0.0, aircon=0.0)
+@example(solar=0.0, battery=0.0, grid=0.0, house=0.0, tesla=0.0, aircon=0.0)
 @SETTINGS
 def test_matches_an_independent_transcription_of_the_brief(
-        solar, battery, grid, house, tesla):
-    got = decompose(solar, battery, grid, house, tesla)
-    want = reference(solar, battery, grid, house, tesla)
+        solar, battery, grid, house, tesla, aircon):
+    got = decompose(solar, battery, grid, house, tesla, aircon)
+    want = reference(solar, battery, grid, house, tesla, aircon)
     for k in KEYS:
         _assert_close(got[k], want[k], "reference mismatch on %s" % k)
 
 
 @given(**WILD)
 @FEW
-def test_matches_the_reference_on_wild_input_too(solar, battery, grid, house, tesla):
+def test_matches_the_reference_on_wild_input_too(solar, battery, grid, house, tesla, aircon):
     try:
-        got = decompose(solar, battery, grid, house, tesla)
+        got = decompose(solar, battery, grid, house, tesla, aircon)
     except BAD:
         return
-    want = reference(solar, battery, grid, house, tesla)
+    want = reference(solar, battery, grid, house, tesla, aircon)
     for k in KEYS:
         _assert_close(got[k], want[k], "reference mismatch on %s" % k,
                       rel=1e-9, abs_=1e-6)
@@ -1234,13 +1481,14 @@ def test_the_reference_model_is_not_trivially_agreeable():
     sequentially) on a sample where the two genuinely differ, so a future edit
     that accidentally turns `reference` into a passthrough is caught.
     """
-    args = (3000.0, -1000.0, 1000.0, 4000.0, 1000.0)
+    args = (3000.0, -1000.0, 1000.0, 4000.0, 1000.0, 800.0)
     ref = reference(*args)
     # A sequential rule spends the battery on the house first, so the house
     # would receive 1000 W of battery and 0 W of grid; proportional gives it a
     # mix of all three.
     assert ref["grid_to_house"] > 0.0
     assert ref["battery_to_tesla"] > 0.0
+    assert ref["solar_to_aircon"] > 0.0
 
 
 # ===========================================================================
@@ -1292,18 +1540,21 @@ def test_every_loss_rule_keeps_the_hard_invariants(rule):
     a flow negative, fabricate a forbidden link, or break the sink fill."""
     previous = _set_rule(rule)
     try:
-        for args in [(3000.0, -1000.0, 1000.0, 4000.0, 1000.0),
-                     (0.0, 0.0, 2000.0, 0.0, 0.0),
-                     (0.0, 0.0, 0.0, 0.0, 0.0),
-                     (2982.0, -457.0, -98.0, 3078.0, 300.0),
-                     (40.0, -40.0, 0.0, 60.0, 0.0),
-                     (6500.0, 5000.0, -6000.0, 0.0, 0.0)]:
+        for args in [(3000.0, -1000.0, 1000.0, 4000.0, 1000.0, 800.0),
+                     (0.0, 0.0, 2000.0, 0.0, 0.0, 0.0),
+                     (0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                     (2982.0, -457.0, -98.0, 3078.0, 300.0, 500.0),
+                     (40.0, -40.0, 0.0, 60.0, 0.0, 60.0),
+                     (6500.0, 5000.0, -6000.0, 0.0, 0.0, 0.0),
+                     # air con out-reading what the car left, under both rules
+                     (3000.0, -1000.0, 1000.0, 1000.0, 900.0, 900.0)]:
             f = decompose(*args)
             assert set(f) == set(KEYS), rule
             for k, v in f.items():
                 assert v >= 0.0 and math.isfinite(v), "%s %s = %r" % (rule, k, v)
             p = parts(*args)
             assert _inbound(f, "tesla") <= p["T"] * (1 + FP_REL) + FP_ABS
+            assert _inbound(f, "aircon") <= p["A"] * (1 + FP_REL) + FP_ABS
             assert f["solar_to_export"] <= p["E"] * (1 + FP_REL) + FP_ABS
             if p["S"] == 0.0:
                 assert all(v == 0.0 for k, v in f.items() if k.startswith("solar_to_"))
@@ -1322,7 +1573,7 @@ def test_the_two_loss_rules_actually_differ():
     measured efficiency is ~0.22 and proportional over-credits it."""
     names = sorted(flows.LOSS_RULES)
     assert len(names) >= 2
-    args = (0.0, -40.0, 60.0, 60.0, 0.0)
+    args = (0.0, -40.0, 60.0, 60.0, 0.0, 0.0)
     seen = {}
     attr = _selected_name()
     previous = getattr(flows, attr) if attr else names[0]
@@ -1348,14 +1599,15 @@ def test_the_two_loss_rules_actually_differ():
 # ===========================================================================
 
 def _good_pair():
-    args = (3000.0, -1000.0, 1000.0, 4000.0, 1000.0)
+    args = (3000.0, -1000.0, 1000.0, 4000.0, 1000.0, 800.0)
     return decompose(*args), flows.readings(*args)
 
 
-def test_the_flows_constant_matches_the_twelve_keys_the_brief_defines():
+def test_the_flows_constant_matches_the_fifteen_keys_the_brief_defines():
     """flows.FLOWS is the module's own claim about its keys. KEYS above is an
     independent literal transcribed from BRIEF_V2.md. They must agree, and
     checking that here is what stops the key tests from being circular."""
+    assert tuple(flows.SINKS) == SINKS
     assert tuple(flows.FLOWS) == KEYS
 
 
@@ -1439,7 +1691,7 @@ def test_decompose_actually_runs_its_own_structural_guard():
 
     flows.check_structure = spy
     try:
-        result = decompose(3000.0, -1000.0, 1000.0, 4000.0, 1000.0)
+        result = decompose(3000.0, -1000.0, 1000.0, 4000.0, 1000.0, 0.0)
     finally:
         flows.check_structure = original
     assert len(calls) == 1, "decompose did not call check_structure"
@@ -1456,8 +1708,8 @@ def test_check_structure_is_not_defeated_by_python_dash_O():
     src = (
         "import sys; sys.path.insert(0, %r)\n"
         "import flows\n"
-        "out = flows.decompose(3000.0, -1000.0, 1000.0, 4000.0, 1000.0)\n"
-        "r = flows.readings(3000.0, -1000.0, 1000.0, 4000.0, 1000.0)\n"
+        "out = flows.decompose(3000.0, -1000.0, 1000.0, 4000.0, 1000.0, 800.0)\n"
+        "r = flows.readings(3000.0, -1000.0, 1000.0, 4000.0, 1000.0, 800.0)\n"
         "out['solar_to_house'] = -1.0\n"
         "try:\n"
         "    flows.check_structure(out, r)\n"
@@ -1472,19 +1724,20 @@ def test_check_structure_is_not_defeated_by_python_dash_O():
 # --- node_totals: the source of every node state the layout will show --------
 
 def test_node_totals_reports_each_sink_as_the_sum_of_its_inbound_flows():
-    """This is the v2 node-identity decision -- House, Tesla, Battery-in, Export
-    and Inverter are each defined BY their inbound flows, which is what lets
-    House exclude the car without a `subtract_entities` trick."""
-    args = (3000.0, -1000.0, 1000.0, 4000.0, 1000.0)
+    """This is the v2 node-identity decision -- House, Tesla, Air con,
+    Battery-in, Export and Inverter are each defined BY their inbound flows,
+    which is what lets House exclude the car and the air con without a
+    `subtract_entities` trick."""
+    args = (3000.0, -1000.0, 1000.0, 4000.0, 1000.0, 800.0)
     f = decompose(*args)
     n = flows.node_totals(f)
-    for sink in ("house", "tesla", "export", "inverter"):
+    for sink in ("house", "tesla", "aircon", "export", "inverter"):
         _assert_close(n[sink], _inbound(f, sink), "node_totals[%s]" % sink)
     _assert_close(n["battery_in"], _inbound(f, "battery"), "node_totals[battery_in]")
 
 
 def test_node_totals_reports_each_source_as_the_sum_of_its_outbound_flows():
-    args = (3000.0, -1000.0, 1000.0, 4000.0, 1000.0)
+    args = (3000.0, -1000.0, 1000.0, 4000.0, 1000.0, 800.0)
     f = decompose(*args)
     n = flows.node_totals(f)
     for src in SOURCES:
@@ -1494,25 +1747,33 @@ def test_node_totals_reports_each_source_as_the_sum_of_its_outbound_flows():
 
 def test_node_totals_house_excludes_the_car():
     """The whole reason v2 exists. 7 kW of car inside a 7.5 kW load must leave
-    House at 500 W, not 7500 W."""
-    n = flows.node_totals(decompose(0.0, 0.0, 8000.0, 7500.0, 7000.0))
+    House at 500 W, not 7500 W -- and 300 W of air con inside the same load must
+    come out of House too, leaving 200 W."""
+    n = flows.node_totals(decompose(0.0, 0.0, 8000.0, 7500.0, 7000.0, 0.0))
     _assert_close(n["tesla"], 7000.0, "tesla")
     _assert_close(n["house"], 500.0, "house")
+    assert n["aircon"] == 0.0
+
+    m = flows.node_totals(decompose(0.0, 0.0, 8000.0, 7500.0, 7000.0, 300.0))
+    _assert_close(m["tesla"], 7000.0, "tesla")
+    _assert_close(m["aircon"], 300.0, "aircon")
+    _assert_close(m["house"], 200.0, "house")
 
 
 def test_node_totals_export_has_exactly_one_contributor():
     """If Export ever acquires a second inbound, the battery has been given a
     path to the grid."""
-    f = decompose(5000.0, 0.0, -1000.0, 500.0, 0.0)
+    f = decompose(5000.0, 0.0, -1000.0, 500.0, 0.0, 0.0)
     assert flows.node_totals(f)["export"] == f["solar_to_export"]
 
 
 @given(**BASE)
 @SETTINGS
-def test_node_totals_never_invents_or_loses_energy(solar, battery, grid, house, tesla):
-    f = decompose(solar, battery, grid, house, tesla)
+def test_node_totals_never_invents_or_loses_energy(solar, battery, grid, house, tesla, aircon):
+    f = decompose(solar, battery, grid, house, tesla, aircon)
     n = flows.node_totals(f)
-    sinks = n["house"] + n["tesla"] + n["battery_in"] + n["export"] + n["inverter"]
+    sinks = (n["house"] + n["tesla"] + n["aircon"] + n["battery_in"]
+             + n["export"] + n["inverter"])
     sources = n["solar_spent"] + n["battery_spent"] + n["grid_spent"]
     _assert_close(sinks, sources, "node roll-up balances", rel=1e-9, abs_=1e-6)
     _assert_close(sinks, sum(f.values()), "node roll-up totals the flows",
@@ -1529,7 +1790,7 @@ def test_node_totals_never_invents_or_loses_energy(solar, battery, grid, house, 
 # outputs actually move -- rather than by re-reading DEPENDS_ON.
 # ===========================================================================
 
-INPUT_CHANNELS = ("solar", "battery", "grid", "house", "tesla")
+INPUT_CHANNELS = ("solar", "battery", "grid", "house", "tesla", "aircon")
 
 
 def test_no_blind_channel_means_nothing_is_unreportable():
@@ -1547,7 +1808,8 @@ def test_all_channels_blind_means_nothing_can_be_reported():
     dead = flows.unreportable(INPUT_CHANNELS)
     for key in KEYS:
         assert key in dead, key
-    for node in ("house", "tesla", "battery_in", "export", "inverter"):
+    for node in ("house", "tesla", "aircon", "battery_in", "export",
+                 "inverter"):
         assert node in dead, node
 
 
@@ -1572,19 +1834,23 @@ def test_the_declared_dependencies_cover_every_flow_that_actually_moves(channel)
     """The empirical check, and the one that matters.
 
     For each input channel, perturb it across a spread of samples and record
-    which of the twelve flows changed. Every flow that moved MUST be listed as
+    which of the fifteen flows changed. Every flow that moved MUST be listed as
     unreportable when that channel goes blind. An under-declaration here means
     a flow sensor would keep publishing a number computed from a dead input.
     """
     dead = flows.unreportable((channel,))
     samples = [
-        (3000.0, -1000.0, 1000.0, 4000.0, 1000.0),
-        (5000.0, 2000.0, -1500.0, 800.0, 0.0),
-        (0.0, -800.0, 1200.0, 1900.0, 0.0),
-        (0.0, 3000.0, 4000.0, 900.0, 400.0),
-        (2982.0, -457.0, -98.0, 3078.0, 300.0),
-        (100.0, 0.0, 7000.0, 7100.0, 6900.0),
-        (0.0, 0.0, 2000.0, 0.0, 0.0),
+        (3000.0, -1000.0, 1000.0, 4000.0, 1000.0, 0.0),
+        (3000.0, -1000.0, 1000.0, 4000.0, 1000.0, 900.0),
+        (5000.0, 2000.0, -1500.0, 800.0, 0.0, 400.0),
+        (0.0, -800.0, 1200.0, 1900.0, 0.0, 0.0),
+        (0.0, 3000.0, 4000.0, 900.0, 400.0, 300.0),
+        (2982.0, -457.0, -98.0, 3078.0, 300.0, 500.0),
+        (100.0, 0.0, 7000.0, 7100.0, 6900.0, 150.0),
+        (0.0, 0.0, 2000.0, 0.0, 0.0, 0.0),
+        # air con pressed right up against the clamp, where perturbing `tesla`
+        # DOES move the air-con flows and `aircon` itself stops mattering
+        (3000.0, -1000.0, 1000.0, 2000.0, 800.0, 1200.0),
     ]
     moved = set()
     idx = INPUT_CHANNELS.index(channel)
@@ -1593,7 +1859,8 @@ def test_the_declared_dependencies_cover_every_flow_that_actually_moves(channel)
         for delta in (+250.0, -250.0, +37.5):
             probe = list(base)
             probe[idx] = base[idx] + delta
-            if channel in ("solar", "house", "tesla") and probe[idx] < 0:
+            if (channel in ("solar", "house", "tesla", "aircon")
+                    and probe[idx] < 0):
                 continue
             b = decompose(*probe)
             for k in KEYS:
@@ -1617,23 +1884,77 @@ def test_the_inverter_node_genuinely_does_not_depend_on_the_tesla_reading():
     assert not ({"solar_to_inverter", "battery_to_inverter", "grid_to_inverter"}
                 & flows.unreportable(("tesla",)))
     base = (3000.0, -1000.0, 1000.0, 4000.0)
-    first = decompose(*base, 0.0)
+    first = decompose(*base, 0.0, 600.0)
     for t in (500.0, 2000.0, 4000.0, 9000.0):
-        got = decompose(*base, t)
+        got = decompose(*base, t, 600.0)
         for k in ("solar_to_inverter", "battery_to_inverter", "grid_to_inverter"):
             _assert_close(got[k], first[k], "%s at tesla=%g" % (k, t))
 
 
+def test_the_inverter_node_genuinely_does_not_depend_on_the_air_con_reading():
+    """The same property for the sixth channel, and it holds for the same
+    reason: the residual subtracts `house_rest + tesla + aircon`, which is just
+    `house` once both clamps have run, so the three-way split of the load
+    cancels out of L entirely.
+
+    This is what lets the four replay fixtures -- captured before an air-con
+    channel existed -- keep reporting every Inverter figure they always did.
+    """
+    assert not ({"solar_to_inverter", "battery_to_inverter", "grid_to_inverter"}
+                & flows.unreportable(("aircon",)))
+    base = (3000.0, -1000.0, 1000.0, 4000.0, 600.0)
+    first = decompose(*base, 0.0)
+    for a in (500.0, 2000.0, 3400.0, 9000.0):
+        got = decompose(*base, a)
+        for k in ("solar_to_inverter", "battery_to_inverter", "grid_to_inverter"):
+            _assert_close(got[k], first[k], "%s at aircon=%g" % (k, a))
+
+
+def test_the_tesla_flows_are_genuinely_blind_to_the_air_con_reading():
+    """DEPENDS_ON keeps `_ALL` alongside `_ALLA` purely because of this, and it
+    is a real asymmetry rather than an oversight: T is clamped to the house load
+    BEFORE A is taken, so no air-con reading can move it. Reverse the two clamps
+    and this silently stops being true while every conservation test still
+    passes."""
+    assert not ({"solar_to_tesla", "battery_to_tesla", "grid_to_tesla"}
+                & flows.unreportable(("aircon",)))
+    base = (3000.0, -1000.0, 1000.0, 4000.0, 900.0)
+    first = decompose(*base, 0.0)
+    for a in (500.0, 2000.0, 3100.0, 9000.0):
+        got = decompose(*base, a)
+        for k in ("solar_to_tesla", "battery_to_tesla", "grid_to_tesla"):
+            assert got[k] == first[k], (
+                "%s moved from %r to %r at aircon=%g -- the Tesla is no longer "
+                "carved out first" % (k, first[k], got[k], a))
+
+
+def test_exactly_six_flows_declare_a_dependency_on_the_aircon_channel():
+    """The minimality half, for the sixth channel. Air con can only move the
+    three `*_to_house` flows (it is taken out of Hr) and its own three. If it
+    ever acquired a seventh, something that should read the whole load has
+    started reading a slice of it."""
+    dead = flows.unreportable(("aircon",))
+    flow_keys = {k for k in dead if k in KEYS}
+    assert flow_keys == {
+        "solar_to_house", "battery_to_house", "grid_to_house",
+        "solar_to_aircon", "battery_to_aircon", "grid_to_aircon"}, sorted(flow_keys)
+    assert len(flow_keys) == 6
+
+
 def test_export_survives_a_dead_house_or_tesla_sensor():
-    """Export is `min(solar, metered export)` and touches neither, so a dead
-    house_load must not blank the Export ribbon."""
+    """Export is `min(solar, metered export)` and touches none of the three, so
+    a dead house_load, Tesla or air-con sensor must not blank the Export
+    ribbon."""
     assert "solar_to_export" not in flows.unreportable(("house",))
     assert "solar_to_export" not in flows.unreportable(("tesla",))
-    first = decompose(4000.0, 0.0, -1500.0, 0.0, 0.0)["solar_to_export"]
+    assert "solar_to_export" not in flows.unreportable(("aircon",))
+    first = decompose(4000.0, 0.0, -1500.0, 0.0, 0.0, 0.0)["solar_to_export"]
     for house in (0.0, 900.0, 5000.0):
         for t in (0.0, 900.0):
-            got = decompose(4000.0, 0.0, -1500.0, house, min(t, house))
-            _assert_close(got["solar_to_export"], first, "export at house=%g" % house)
+            for a in (0.0, 900.0, 9000.0):
+                got = decompose(4000.0, 0.0, -1500.0, house, min(t, house), a)
+                _assert_close(got["solar_to_export"], first,
+                              "export at house=%g" % house)
 
 
 # ===========================================================================
@@ -1660,7 +1981,7 @@ class DegenerateFixture(AssertionError):
     """This fixture cannot detect the inversion it claims to test."""
 
 
-def nondegenerate(solar, battery, grid, house, tesla):
+def nondegenerate(solar, battery, grid, house, tesla, aircon):
     """Return the sample, or raise if it cannot detect a sign inversion.
 
     Three conditions, each with its own failure mode:
@@ -1669,11 +1990,11 @@ def nondegenerate(solar, battery, grid, house, tesla):
       every sink, so an inverted sign on it produces the same all-zero answer;
     * the three mutually distinct by more than 1 W -- two equal sources are
       interchangeable, so swapping them changes nothing observable;
-    * a strictly positive residual and a house load that is not all car -- with
-      the residual clamped at zero, or with House empty, whole families of
-      flows collapse to zero and stop discriminating.
+    * a strictly positive residual and a house load that is not all car and not
+      all air con -- with the residual clamped at zero, or with House empty,
+      whole families of flows collapse to zero and stop discriminating.
     """
-    p = parts(solar, battery, grid, house, tesla)
+    p = parts(solar, battery, grid, house, tesla, aircon)
     mags = {"solar": p["S"],
             "battery": p["B"] if p["B"] else p["C"],
             "grid": p["G"] if p["G"] else p["E"]}
@@ -1693,7 +2014,7 @@ def nondegenerate(solar, battery, grid, house, tesla):
             "discriminating" % p["L_raw"])
     if p["Hr"] <= 0.0:
         raise DegenerateFixture("House is empty, so the *_to_house flows are all 0")
-    return (solar, battery, grid, house, tesla)
+    return (solar, battery, grid, house, tesla, aircon)
 
 
 def assert_polarity_is_detectable(a, b, what):
@@ -1713,19 +2034,23 @@ def test_the_degeneracy_guard_rejects_the_v1_trap():
     """Self-check. The guard is only worth having if it refuses the exact
     fixtures that fooled v1."""
     with pytest.raises(DegenerateFixture):          # zero battery
-        nondegenerate(3000.0, 0.0, 1000.0, 2000.0, 0.0)
+        nondegenerate(3000.0, 0.0, 1000.0, 2000.0, 0.0, 0.0)
     with pytest.raises(DegenerateFixture):          # zero grid
-        nondegenerate(3000.0, -1000.0, 0.0, 2000.0, 0.0)
+        nondegenerate(3000.0, -1000.0, 0.0, 2000.0, 0.0, 0.0)
     with pytest.raises(DegenerateFixture):          # zero solar
-        nondegenerate(0.0, -1000.0, 1000.0, 1500.0, 0.0)
+        nondegenerate(0.0, -1000.0, 1000.0, 1500.0, 0.0, 0.0)
     with pytest.raises(DegenerateFixture):          # two equal sources
-        nondegenerate(3000.0, -1000.0, 1000.0, 2000.0, 0.0)
+        nondegenerate(3000.0, -1000.0, 1000.0, 2000.0, 0.0, 0.0)
     with pytest.raises(DegenerateFixture):          # clamped residual
-        nondegenerate(3000.0, -1000.0, 500.0, 9000.0, 0.0)
+        nondegenerate(3000.0, -1000.0, 500.0, 9000.0, 0.0, 0.0)
     with pytest.raises(DegenerateFixture):          # House is all car
-        nondegenerate(3000.0, -1000.0, 500.0, 900.0, 900.0)
+        nondegenerate(3000.0, -1000.0, 500.0, 900.0, 900.0, 0.0)
+    with pytest.raises(DegenerateFixture):          # House is all air con
+        nondegenerate(3000.0, -1000.0, 500.0, 900.0, 0.0, 900.0)
+    with pytest.raises(DegenerateFixture):          # car plus air con take it all
+        nondegenerate(3000.0, -1000.0, 500.0, 900.0, 500.0, 400.0)
     # and it accepts a fixture that really can discriminate
-    nondegenerate(3000.0, -1000.0, 500.0, 2000.0, 400.0)
+    nondegenerate(3000.0, -1000.0, 500.0, 2000.0, 400.0, 300.0)
 
 
 def test_the_v1_trap_fixture_is_no_longer_degenerate_and_the_inverter_node_is_why():
@@ -1745,8 +2070,8 @@ def test_the_v1_trap_fixture_is_no_longer_degenerate_and_the_inverter_node_is_wh
     This does NOT retire the degeneracy rule -- see the next test for the case
     that is still undetectable under v2 -- but the specific v1 fixture is safe.
     """
-    a = (2000.0, 0.0, 500.0, 2000.0, 0.0)
-    b = (2000.0, 0.0, -500.0, 2000.0, 0.0)
+    a = (2000.0, 0.0, 500.0, 2000.0, 0.0, 0.0)
+    b = (2000.0, 0.0, -500.0, 2000.0, 0.0, 0.0)
     fa, fb = assert_polarity_is_detectable(a, b, "the v1 trap fixture")
     assert fa["grid_to_inverter"] > 0.0, (
         "the import vanished again; the v1 trap has come back")
@@ -1764,7 +2089,7 @@ def test_a_source_reading_zero_makes_its_own_polarity_undetectable(channel, idx)
     sign is invisible, and a test built on such a fixture reports success while
     proving nothing.
     """
-    base = [3000.0, -900.0, 400.0, 2000.0, 500.0]
+    base = [3000.0, -900.0, 400.0, 2000.0, 500.0, 300.0]
 
     live = list(base)
     flipped = list(base)
@@ -1786,8 +2111,8 @@ def test_battery_polarity_is_detected_on_a_nondegenerate_fixture():
     """Discharging must make the battery a SOURCE; charging must make it a SINK.
     An inverted battery sign swaps the two, and CLAUDE.md warns this is exactly
     the shape of thing an agent helpfully flips."""
-    charge = nondegenerate(3000.0, 900.0, 400.0, 2000.0, 500.0)
-    disch = nondegenerate(3000.0, -900.0, 400.0, 2000.0, 500.0)
+    charge = nondegenerate(3000.0, 900.0, 400.0, 2000.0, 500.0, 300.0)
+    disch = nondegenerate(3000.0, -900.0, 400.0, 2000.0, 500.0, 300.0)
     fc, fd = assert_polarity_is_detectable(charge, disch, "battery polarity")
     assert _inbound(fc, "battery") > 0.0 and _outbound(fd, "battery") > 0.0
     assert _outbound(fc, "battery") == 0.0, "a charging battery is supplying"
@@ -1799,8 +2124,8 @@ def test_grid_polarity_is_detected_on_a_nondegenerate_fixture():
     only by solar. CLAUDE.md records 33257 as positive EXPORTING at the register
     while HA presents positive IMPORTING -- an inversion here is one boundary
     away at all times."""
-    imp = nondegenerate(3000.0, -900.0, 400.0, 2000.0, 500.0)
-    exp = nondegenerate(3000.0, -900.0, -400.0, 2000.0, 500.0)
+    imp = nondegenerate(3000.0, -900.0, 400.0, 2000.0, 500.0, 300.0)
+    exp = nondegenerate(3000.0, -900.0, -400.0, 2000.0, 500.0, 300.0)
     fi, fe = assert_polarity_is_detectable(imp, exp, "grid polarity")
     assert _outbound(fi, "grid") > 0.0, "an importing meter supplies nothing"
     assert fi["solar_to_export"] == 0.0
@@ -1811,21 +2136,23 @@ def test_grid_polarity_is_detected_on_a_nondegenerate_fixture():
 def test_solar_polarity_is_detected_on_a_nondegenerate_fixture():
     """Solar has no negative branch, so the inversion to catch is solar being
     read as a sink. It must always supply and never receive."""
-    a = nondegenerate(3000.0, -900.0, 400.0, 2000.0, 500.0)
+    a = nondegenerate(3000.0, -900.0, 400.0, 2000.0, 500.0, 300.0)
     f = decompose(*a)
     assert _outbound(f, "solar") > 0.0
     assert not [k for k in f if k.endswith("_to_solar")]
+    assert not [k for k in f if k.startswith("aircon_to_")], (
+        "air con is a terminus; nothing may leave it")
 
 
 @given(**BASE)
 @SETTINGS
 def test_battery_and_grid_polarity_agree_with_the_readings_helper(
-        solar, battery, grid, house, tesla):
+        solar, battery, grid, house, tesla, aircon):
     """Cross-check the sign convention against flows.readings(), which is the
     only other place it is written down. Two independent statements of the same
     convention that disagree is how an inversion survives."""
-    r = flows.readings(solar, battery, grid, house, tesla)
-    f = decompose(solar, battery, grid, house, tesla)
+    r = flows.readings(solar, battery, grid, house, tesla, aircon)
+    f = decompose(solar, battery, grid, house, tesla, aircon)
     if battery > 0:
         assert r["charge"] > 0 and r["discharge"] == 0
         assert _outbound(f, "battery") == 0.0
@@ -1867,7 +2194,7 @@ def test_battery_and_grid_polarity_agree_with_the_readings_helper(
 
 def test_export_is_drawn_with_no_inbound_when_solar_reads_zero():
     """The hole itself, stated as a fact rather than found by accident."""
-    f = decompose(0.0, -3000.0, -1903.0, 500.0, 0.0)
+    f = decompose(0.0, -3000.0, -1903.0, 500.0, 0.0, 0.0)
     assert f["solar_to_export"] == 0.0
     assert not [k for k in f if k.endswith("_to_export") and f[k] > 0.0], (
         "something other than solar is feeding Export")
@@ -1878,7 +2205,7 @@ def test_the_export_shortfall_is_exactly_the_metered_export_when_solar_is_zero(
         export_w):
     """Not approximately, and not partially. The whole metered export is
     dropped, at every magnitude."""
-    f = decompose(0.0, -3000.0, -export_w, 500.0, 0.0)
+    f = decompose(0.0, -3000.0, -export_w, 500.0, 0.0, 0.0)
     assert f["solar_to_export"] == 0.0
     assert export_w - f["solar_to_export"] == export_w
 
@@ -1886,15 +2213,15 @@ def test_the_export_shortfall_is_exactly_the_metered_export_when_solar_is_zero(
 @given(solar=st.floats(0.0, 6500.0, allow_nan=False, allow_infinity=False),
        export=st.floats(0.0, 6000.0, allow_nan=False, allow_infinity=False),
        battery=st.floats(-5000.0, 5000.0, allow_nan=False, allow_infinity=False),
-       house=HOUSE, tesla=TESLA)
+       house=HOUSE, tesla=TESLA, aircon=AIRCON)
 @SETTINGS
 def test_the_export_shortfall_is_never_more_than_the_solar_deficit(
-        solar, export, battery, house, tesla):
+        solar, export, battery, house, tesla, aircon):
     """The bound that makes the hole tolerable: Export loses exactly
     max(0, E - S) and never a watt more. If the shortfall could exceed that,
     export would be vanishing for some OTHER reason and the whole rationale
     (battery cannot export) would no longer explain it."""
-    f = decompose(solar, battery, -export, house, tesla)
+    f = decompose(solar, battery, -export, house, tesla, aircon)
     short = export - f["solar_to_export"]
     _assert_close(short, max(0.0, export - solar), "export shortfall")
 
@@ -1905,7 +2232,7 @@ def test_no_other_source_is_allowed_to_rescue_the_export_ribbon():
     is not merely zero, it is unrepresentable; and import and export never
     coexist on one meter reading. Pinned so a future 'improvement' fails."""
     for battery in (-5000.0, 0.0, 5000.0):
-        f = decompose(0.0, battery, -2000.0, 100.0, 0.0)
+        f = decompose(0.0, battery, -2000.0, 100.0, 0.0, 0.0)
         assert "battery_to_export" not in f
         assert "grid_to_export" not in f
         assert f["solar_to_export"] == 0.0
@@ -1915,7 +2242,7 @@ def test_a_single_watt_of_solar_does_not_unlock_the_whole_export():
     """The boundary. `min(S, E)` means 1 W of solar buys exactly 1 W of export
     ribbon, not the whole 2 kW. A cap written as `E if S > 0 else 0` would pass
     every other test in this section and fail this one."""
-    f = decompose(1.0, 0.0, -2000.0, 0.0, 0.0)
+    f = decompose(1.0, 0.0, -2000.0, 0.0, 0.0, 0.0)
     assert f["solar_to_export"] == 1.0
 
 
@@ -1948,7 +2275,7 @@ def test_the_counterexample_to_exact_source_conservation():
     the node's own state) but it is not exact, and calling it exact would put a
     false claim in the documentation.
     """
-    f = decompose(100.0, 0.0, 0.0, 900.0, 0.0)
+    f = decompose(100.0, 0.0, 0.0, 900.0, 0.0, 0.0)
     assert _outbound(f, "solar") == 900.0
     assert _inbound(f, "house") == 900.0
     assert _inbound(f, "inverter") == 0.0
@@ -1957,7 +2284,7 @@ def test_the_counterexample_to_exact_source_conservation():
 def test_the_same_counterexample_on_the_grid():
     """v2-physics' own example, kept here so both agents' claims are pinned in
     one place: 900 W credited to a meter reading 100 W."""
-    f = decompose(0.0, 0.0, 100.0, 900.0, 0.0)
+    f = decompose(0.0, 0.0, 100.0, 900.0, 0.0, 0.0)
     assert _outbound(f, "grid") == 900.0
 
 
@@ -1975,27 +2302,27 @@ def test_solar_spends_exactly_its_reading_in_both_min_branches(args):
 @given(**BASE)
 @SETTINGS
 def test_solar_spends_exactly_its_reading_whenever_export_out_reads_solar(
-        solar, battery, grid, house, tesla):
+        solar, battery, grid, house, tesla, aircon):
     """The E > S branch specifically. Here `s2e = S` and the solar share is 0,
     so the total is S regardless of the residual -- this branch really is
     unconditionally exact, and it is worth separating from the one that is not.
     """
-    p = parts(solar, battery, grid, house, tesla)
+    p = parts(solar, battery, grid, house, tesla, aircon)
     assume(p["E"] > p["S"])
-    f = decompose(solar, battery, grid, house, tesla)
+    f = decompose(solar, battery, grid, house, tesla, aircon)
     _assert_close(_outbound(f, "solar"), p["S"], "solar outbound")
 
 
 @given(**BASE)
 @SETTINGS
-def test_the_total_of_all_twelve_flows_equals_the_total_of_the_five_sinks(
-        solar, battery, grid, house, tesla):
+def test_the_total_of_all_fifteen_flows_equals_the_total_of_the_six_sinks(
+        solar, battery, grid, house, tesla, aircon):
     """v2-physics' invariant: this one holds on EVERY sample, in every regime,
     with no precondition at all. It is the strongest unconditional statement
     available and it is the one to rely on."""
-    f = decompose(solar, battery, grid, house, tesla)
+    f = decompose(solar, battery, grid, house, tesla, aircon)
     sinks = sum(_inbound(f, s) for s in
-                ("house", "tesla", "battery", "export", "inverter"))
+                ("house", "tesla", "aircon", "battery", "export", "inverter"))
     _assert_close(sinks, sum(f.values()), "sinks vs flows", rel=1e-12, abs_=1e-9)
 
 
@@ -2003,7 +2330,7 @@ def test_the_total_of_all_twelve_flows_equals_the_total_of_the_five_sinks(
 # 18. bool, tested for AGREEMENT as well as rejection
 #
 # t-edges' point, and it is the right shape: the durable risk is not whether a
-# bool is rejected, it is whether the five positions DISAGREE. A guard on solar
+# bool is rejected, it is whether the six positions DISAGREE. A guard on solar
 # that is missing on tesla lets a bool inject a silent 1 W through that one
 # channel, with no exception and no log line. The agreement test stays valid
 # whichever ruling is taken; the rejection test above encodes the ruling that
@@ -2011,7 +2338,7 @@ def test_the_total_of_all_twelve_flows_equals_the_total_of_the_five_sinks(
 # ===========================================================================
 
 @pytest.mark.parametrize("value", [True, False])
-def test_bool_handling_is_identical_in_all_five_positions(value):
+def test_bool_handling_is_identical_in_all_six_positions(value):
     outcomes = {}
     for idx, name in enumerate(CHANNELS):
         args = list(GOOD)
@@ -2021,6 +2348,7 @@ def test_bool_handling_is_identical_in_all_five_positions(value):
             outcomes[name] = "accepted"
         except BAD:
             outcomes[name] = "rejected"
+    assert len(outcomes) == 6
     assert len(set(outcomes.values())) == 1, (
         "bool %r is handled inconsistently across channels: %r -- a guard "
         "missing on one channel injects a silent %g W through it"
@@ -2031,66 +2359,93 @@ def test_bool_defeats_a_parse_based_guard_which_is_why_it_needs_its_own():
     """The mechanism, asserted rather than described. `float(True)` succeeds and
     `isinstance(True, int)` is True, so any guard written as `try: float(x)`
     passes a bool straight through as 1 W. NaN defeats parse-based guards by the
-    same mechanism, which is why both are checked in all five positions."""
+    same mechanism, which is why both are checked in all six positions."""
     assert float(True) == 1.0 and isinstance(True, int)
     assert not math.isnan(float(True))
     with pytest.raises(BAD):
-        decompose(True, 0.0, 0.0, 0.0, 0.0)
+        decompose(True, 0.0, 0.0, 0.0, 0.0, 0.0)
 
 
 # ===========================================================================
 # 19. Which node totals survive a dead Tesla sensor
 #
 # This decides how much of 2026-08-27 is reportable, so it is worth stating
-# precisely rather than approximately. SIX of the twelve flows depend on T --
-# the three `*_to_house` and the three `*_to_tesla`. The other six do not, and
-# neither do six of the eight node totals, because `Hr + T == house_load` for
-# every T and the shares depend on S1, B and G alone.
+# precisely rather than approximately.
 #
-# A summary of "ten of the twelve flows are blind to T" is wrong in the
-# direction that matters: it would license reporting House and Tesla on a day
-# when the car sensor was dead.
+# **The count changed when air con arrived, and it changed in the unsafe
+# direction, so it is restated rather than adjusted.** It used to be SIX of the
+# twelve flows -- the three `*_to_house` and the three `*_to_tesla`. It is now
+# NINE of the fifteen: `A = min(aircon, house_load - T)` reads T, so a dead car
+# sensor takes the three `*_to_aircon` flows down with it. The other six flows
+# are still blind to T, and so are six of the nine node totals, because
+# `Hr + T + A == house_load` for every T and the shares depend on S1, B and G
+# alone.
+#
+# A summary of "ten of the twelve flows are blind to T" was wrong in the
+# direction that matters even before air con: it would license reporting House
+# and Tesla on a day when the car sensor was dead. Keeping the old six now
+# would be wrong the same way about Air con.
 # ===========================================================================
 
 _T_BLIND_NODES = ("battery_in", "export", "inverter",
                   "solar_spent", "battery_spent", "grid_spent")
-_T_DEPENDENT_NODES = ("house", "tesla")
+_T_DEPENDENT_NODES = ("house", "tesla", "aircon")
 
 
 @given(solar=SOLAR, battery=BATTERY, grid=GRID,
-       house=st.floats(1.0, 12000.0, allow_nan=False, allow_infinity=False))
+       house=st.floats(1.0, 12000.0, allow_nan=False, allow_infinity=False),
+       aircon=AIRCON)
 @SETTINGS
 def test_exactly_six_node_totals_are_blind_to_the_tesla_reading(
-        solar, battery, grid, house):
-    base = flows.node_totals(decompose(solar, battery, grid, house, 0.0))
+        solar, battery, grid, house, aircon):
+    """Six, not eight: Air con joined House and Tesla on the dependent side
+    when it started taking its slice out of what the car left. The air-con
+    reading is drawn here rather than held at zero precisely so that the six
+    that are still blind are shown to be blind WITH a third slice in play."""
+    base = flows.node_totals(decompose(solar, battery, grid, house, 0.0, aircon))
     for t in (0.0, house * 0.25, house * 0.5, house, house * 2.0):
-        got = flows.node_totals(decompose(solar, battery, grid, house, t))
+        got = flows.node_totals(decompose(solar, battery, grid, house, t, aircon))
         for node in _T_BLIND_NODES:
             _assert_close(got[node], base[node],
                           "%s at tesla=%g" % (node, t), rel=1e-9, abs_=1e-6)
 
 
-def test_the_two_tesla_dependent_node_totals_really_do_move():
-    """The other half of the claim. If House and Tesla did NOT move with T, the
-    split would be decorative and 2026-08-27 would be fully reportable. They do
-    move, which is exactly why it is not."""
-    a = flows.node_totals(decompose(3000.0, -1000.0, 1000.0, 4000.0, 0.0))
-    b = flows.node_totals(decompose(3000.0, -1000.0, 1000.0, 4000.0, 3000.0))
+def test_the_three_tesla_dependent_node_totals_really_do_move():
+    """The other half of the claim. If House, Tesla and Air con did NOT move
+    with T, the split would be decorative and 2026-08-27 would be fully
+    reportable. They do move, which is exactly why it is not.
+
+    Air con needs a fixture that presses it against the clamp -- 3500 W of air
+    con inside a 4000 W load -- because with room to spare A is genuinely
+    independent of T and the node would sit still. That is the honest shape of
+    the dependency: it is real, and it only bites near the clamp.
+    """
+    a = flows.node_totals(decompose(3000.0, -1000.0, 1000.0, 4000.0, 0.0, 3500.0))
+    b = flows.node_totals(decompose(3000.0, -1000.0, 1000.0, 4000.0, 3000.0, 3500.0))
     for node in _T_DEPENDENT_NODES:
         assert abs(a[node] - b[node]) > 1.0, node
-    _assert_close(a["house"] + a["tesla"], b["house"] + b["tesla"],
-                  "House + Tesla is invariant in T")
+    _assert_close(a["house"] + a["tesla"] + a["aircon"],
+                  b["house"] + b["tesla"] + b["aircon"],
+                  "House + Tesla + Air con is invariant in T")
 
 
-def test_exactly_six_flows_declare_a_dependency_on_the_tesla_channel():
+def test_exactly_nine_flows_declare_a_dependency_on_the_tesla_channel():
     """Cross-check against flows.DEPENDS_ON, which is what the HA plumbing will
-    consult when the sensor goes away. Six, not ten, not two."""
+    consult when the sensor goes away. Nine, not thirteen, not six.
+
+    Six was right while the house load split two ways. The third slice is taken
+    from what the car left, so a dead Tesla reading also unmoors Air con, and
+    leaving this at six would publish three flows computed from a dead input --
+    the exact failure DEPENDS_ON exists to prevent.
+    """
     dead = flows.unreportable(("tesla",))
     flow_keys = {k for k in dead if k in KEYS}
     assert flow_keys == {
         "solar_to_house", "battery_to_house", "grid_to_house",
-        "solar_to_tesla", "battery_to_tesla", "grid_to_tesla"}, sorted(flow_keys)
-    assert len(flow_keys) == 6
+        "solar_to_tesla", "battery_to_tesla", "grid_to_tesla",
+        "solar_to_aircon", "battery_to_aircon",
+        "grid_to_aircon"}, sorted(flow_keys)
+    assert len(flow_keys) == 9
 
 
 # ===========================================================================
@@ -2121,10 +2476,26 @@ def test_the_division_guard_has_no_epsilon_at_any_scale(watts):
     the house. Any guard of the form `total <= eps` blanks this to zero for
     every `watts <= eps`, and the all-zero answer is structurally legal, so no
     other test in this file is obliged to complain."""
-    f = decompose(watts, 0.0, 0.0, watts, 0.0)
+    f = decompose(watts, 0.0, 0.0, watts, 0.0, 0.0)
     assert f["solar_to_house"] == watts, (
         "%g W of solar feeding a %g W house produced %r -- the division guard "
         "is swallowing real samples" % (watts, watts, f["solar_to_house"]))
+
+
+@pytest.mark.parametrize("watts", [
+    5e-324, 1e-320, 1e-30, 1e-12, 1e-9, 1e-6, 0.001, 0.5, 1.0, 2.0,
+])
+def test_the_division_guard_has_no_epsilon_on_the_air_con_path_either(watts):
+    """The same boundary reached through the new sink. A guard that swallowed
+    small totals would blank the air-con ribbon exactly as it blanks the house
+    one, and the LG channel sits at these scales for whole hours at a time --
+    it is an hourly energy derivative, so an hour with a few watt-hours in it
+    lands here."""
+    f = decompose(watts, 0.0, 0.0, watts, 0.0, watts)
+    assert f["solar_to_aircon"] == watts, (
+        "%g W of solar feeding a %g W air-con load produced %r -- the division "
+        "guard is swallowing real samples" % (watts, watts, f["solar_to_aircon"]))
+    assert f["solar_to_house"] == 0.0
 
 
 @pytest.mark.parametrize("watts", [5e-324, 1e-30, 1e-9, 1.0])
@@ -2132,7 +2503,7 @@ def test_the_division_guard_does_not_swallow_a_low_battery_trickle(watts):
     """The realistic version of the same defect. CLAUDE.md records the battery
     trickling at 50-100 W for 39 of every 88 hours, and overnight samples reach
     the single watts; a widened guard makes those nights render empty."""
-    f = decompose(0.0, -watts, 0.0, watts, 0.0)
+    f = decompose(0.0, -watts, 0.0, watts, 0.0, 0.0)
     assert f["battery_to_house"] == watts
 
 

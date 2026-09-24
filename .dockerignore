@@ -1,0 +1,7 @@
+# Never send local secrets or private notes into the build context.
+.env
+CLAUDE.local.md
+.git
+car_tile/
+sankey_tests/
+*_backup.json

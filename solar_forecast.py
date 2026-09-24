@@ -40,8 +40,7 @@ import time
 import urllib.request
 from datetime import date, timedelta
 
-# Site. From REDACTED  via api.postcodes.io.
-LAT, LON = REDACTED_LAT, REDACTED_LON
+import site_env
 
 # Arrays: (name, azimuth, tilt, share of panel count). Azimuth is Open-Meteo's
 # convention - 0 = south, -90 = east, 90 = west - confirmed empirically, not
@@ -87,9 +86,27 @@ HISTORY_API = "https://historical-forecast-api.open-meteo.com/v1/forecast"
 _memo = None
 
 
+def _site_coordinates():
+    """Return the configured site coordinates, resolved only when needed.
+
+    Rounded to 2 decimals (~1 km) before they leave the machine: the models'
+    grids are coarser than that (measured 2026-09-24: 0.1 kWh on a 28 kWh day),
+    and it keeps the exact house out of every Open-Meteo request.
+    """
+    try:
+        return (round(float(site_env.require("SITE_LATITUDE")), 2),
+                round(float(site_env.require("SITE_LONGITUDE")), 2))
+    except ValueError as exc:
+        raise RuntimeError(
+            "SITE_LATITUDE and SITE_LONGITUDE must be decimal coordinates; "
+            "see .env.example"
+        ) from exc
+
+
 def _gti(base, azimuth, tilt, extra):
     """{model: {timestamp: W/m2}} of global tilted irradiance for one plane."""
-    url = (f"{base}?latitude={LAT}&longitude={LON}&hourly=global_tilted_irradiance"
+    latitude, longitude = _site_coordinates()
+    url = (f"{base}?latitude={latitude}&longitude={longitude}&hourly=global_tilted_irradiance"
            f"&tilt={tilt}&azimuth={azimuth}&timezone=Europe%2FLondon"
            f"&models={','.join(MODELS)}&{extra}")
     with urllib.request.urlopen(url, timeout=15) as response:
@@ -105,7 +122,8 @@ def _gti(base, azimuth, tilt, extra):
 def _series(history_from=None):
     """{model: {day: [hourly W/m2, ...]}}, irradiance weighted across the planes."""
     global _memo
-    key = "v2|" + (history_from or "") + "|" + repr(PLANES)
+    key = ("v2|" + (history_from or "") + "|" + repr(PLANES)
+           + "|" + repr(_site_coordinates()))
     if _memo and _memo["key"] == key and time.time() - _memo["at"] < CACHE_SECONDS:
         return _memo["series"]
     if not history_from and os.path.exists(CACHE_FILE):
@@ -310,10 +328,16 @@ def tomorrow_weather():
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
     # Keyed on the target date, not just age: a memo built at 23:55 is still
     # young at 00:05 but is now answering for the wrong day.
+    try:
+        site = _site_coordinates()
+    except RuntimeError:
+        return None
     if (_weather_memo and _weather_memo["day"] == tomorrow
+            and _weather_memo["site"] == site
             and time.time() - _weather_memo["at"] < CACHE_SECONDS):
         return _weather_memo["weather"]
-    url = (f"{FORECAST_API}?latitude={LAT}&longitude={LON}&timezone=Europe%2FLondon"
+    latitude, longitude = site
+    url = (f"{FORECAST_API}?latitude={latitude}&longitude={longitude}&timezone=Europe%2FLondon"
            "&forecast_days=2&daily=weather_code,cloud_cover_mean,sunrise,sunset"
            "&hourly=cloud_cover,temperature_2m,precipitation_probability,weather_code")
     try:
@@ -352,7 +376,8 @@ def tomorrow_weather():
             "hourly": today_hourly,
         },
     }
-    _weather_memo = {"at": time.time(), "day": tomorrow, "weather": weather}
+    _weather_memo = {"at": time.time(), "day": tomorrow, "site": site,
+                     "weather": weather}
     return weather
 
 

@@ -25,5 +25,13 @@ accepts **one Modbus session at a time** — stop any other client first.
   recorded generation; answers "will tomorrow's sun refill the battery?"
 - `control.py` — dry-run-by-default register writes, with hard refusal of the
   DNO grid-protection range.
-- `CLAUDE.md` — the live-verified register map and the reasoning behind every
-  non-obvious decision.
+- `.env.example` — copy to `.env` (gitignored) for the standalone tools: logger
+  serial/MAC, host candidates, site latitude/longitude, optional Octopus
+  credentials. The HA integration needs none of it.
+- `CLAUDE.md` — the safety rules, cross-cutting traps and settled decisions, plus
+  a map of where everything else lives.
+- `docs/` — the detail, split by area: the live-verified register map
+  (`registers.md`), the HA integration and Energy dashboard (`ha-integration.md`),
+  the Sankey chart (`sankey.md`), other Lovelace cards (`dashboard-cards.md`),
+  the forecast model (`forecast.md`), the network (`network.md`), and the legacy
+  API and browser dashboard (`legacy-api-dashboard.md`).

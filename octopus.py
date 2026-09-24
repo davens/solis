@@ -10,8 +10,9 @@ next planned slot.
   uv run --no-project python octopus.py show
   uv run --no-project python octopus.py devices     # find the device id once
 
-Credentials come from the environment, never from a file here:
-OCTOPUS_API_KEY (sk_live_...) and OCTOPUS_ACCOUNT (A-12345678). Optionally
+Credentials come from the environment or the gitignored .env (see
+.env.example), never from a committed file: OCTOPUS_API_KEY (sk_live_...) and
+OCTOPUS_ACCOUNT (A-12345678). Optionally
 OCTOPUS_DEVICE_ID to skip the device lookup, which is one request of rate-limit
 budget saved per process.
 
@@ -31,6 +32,8 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
+
+import site_env  # noqa: F401 - loads .env into os.environ
 from zoneinfo import ZoneInfo
 
 API_URL = "https://api.octopus.energy/v1/graphql/"

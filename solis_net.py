@@ -1,32 +1,42 @@
 """Locate and connect to the Solis logger without hard-coding its address.
 
-The logger's IP is DHCP and has moved more than once (192.0.2.48 -> .45, and
-again after the mesh was bridged), so resolve it by serial number instead.
-Order: $SOLIS_HOST, then a Solarman UDP broadcast, then LAST_KNOWN.
+The logger's address is assigned dynamically, so resolve it by serial number
+or MAC address instead. See CLAUDE.local.md for site-specific network notes.
+Order: $SOLIS_HOST, then a Solarman UDP broadcast, then configured candidates.
 """
-import os
 import socket
 
 from pysolarmanv5 import PySolarmanV5
 
-SERIAL_NUMBER = 0000000000
-LOGGER_MAC = "000000000000"
+import site_env
+
+
+_serial = site_env.get("SOLIS_LOGGER_SERIAL")
+try:
+    SERIAL_NUMBER = int(_serial) if _serial else None
+except ValueError as exc:
+    raise RuntimeError("SOLIS_LOGGER_SERIAL must be an integer") from exc
+LOGGER_MAC = (site_env.get("SOLIS_LOGGER_MAC") or "").replace(":", "").upper()
 PORT = 8899
 SLAVE_ID = 1
-# Tried in order when discovery finds nothing. The logger sits on the 2.4 GHz
-# IoT mesh (192.0.2.x); from the main mesh it is reached through a port
-# forward on that mesh's WAN address. See CLAUDE.md.
-CANDIDATES = ["192.0.2.45", "198.51.100.49"]
+# Tried in order when discovery finds nothing. See CLAUDE.local.md.
+CANDIDATES = [
+    host.strip()
+    for host in (site_env.get("SOLIS_HOST_CANDIDATES") or "").split(",")
+    if host.strip()
+]
 
 DISCOVERY_REQUEST = b"WIFIKIT-214028-READ"
 DISCOVERY_PORT = 48899
 
 
 def discover(serial=SERIAL_NUMBER, timeout=3.0):
-    """Broadcast for Solarman loggers; return the IP matching serial, else None.
+    """Broadcast for Solarman loggers; return a matching IP, else None.
 
     Only works on the same layer-2 segment as the logger.
     """
+    if serial is None and not LOGGER_MAC:
+        return None
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -42,7 +52,9 @@ def discover(serial=SERIAL_NUMBER, timeout=3.0):
             if len(parts) < 3:
                 continue
             ip, mac, found_serial = parts[0], parts[1], parts[2]
-            if found_serial == str(serial) or mac.upper() == LOGGER_MAC:
+            normalised_mac = mac.replace(":", "").upper()
+            if ((serial is not None and found_serial == str(serial))
+                    or (LOGGER_MAC and normalised_mac == LOGGER_MAC)):
                 return ip
     finally:
         sock.close()
@@ -62,7 +74,7 @@ def _port_open(host, port=PORT, timeout=2.0):
 
 def resolve_host(verbose=True):
     """Return the logger's address: override, then discovery, then candidates."""
-    override = os.environ.get("SOLIS_HOST")
+    override = site_env.get("SOLIS_HOST")
     if override:
         return override
     found = discover()
@@ -73,15 +85,30 @@ def resolve_host(verbose=True):
             if verbose:
                 print(f"discovery found nothing; reaching logger via {host}")
             return host
+    if SERIAL_NUMBER is None and not LOGGER_MAC:
+        discovery_note = (
+            "Discovery was skipped because neither SOLIS_LOGGER_SERIAL nor "
+            "SOLIS_LOGGER_MAC is configured. "
+        )
+    else:
+        discovery_note = "Discovery found no matching logger. "
+    candidate_note = (
+        f"Tried candidates: {', '.join(CANDIDATES)}. " if CANDIDATES else ""
+    )
     raise SystemExit(
-        "cannot reach the logger. Tried discovery and "
-        f"{', '.join(CANDIDATES)}. Join the IoT mesh, or set SOLIS_HOST."
+        discovery_note + candidate_note
+        + "Set SOLIS_HOST or configure fallbacks in SOLIS_HOST_CANDIDATES."
     )
 
 
 def connect(host=None):
     if host is None:
         host = resolve_host()
+    if SERIAL_NUMBER is None:
+        raise RuntimeError(
+            "SOLIS_LOGGER_SERIAL is required to connect; set it in the "
+            "environment or copy its example from .env.example into .env"
+        )
     return PySolarmanV5(
         address=host,
         serial=SERIAL_NUMBER,

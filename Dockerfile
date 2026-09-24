@@ -7,7 +7,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # dash.py is deliberately not copied: the container serves JSON only.
-COPY solis_api.py solar_forecast.py octopus.py solis_net.py control.py ./
+COPY solis_api.py solar_forecast.py octopus.py solis_net.py control.py site_env.py ./
 
 # Mutable state (solar_actuals.json, .solar_cache.json, energy_cost.json)
 # lives on a volume so image rebuilds don't lose it.

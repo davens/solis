@@ -7,7 +7,15 @@ from homeassistant.const import CONF_HOST, CONF_PORT, CONF_SCAN_INTERVAL, Platfo
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import CONF_SERIAL, DEFAULT_PORT, DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import (
+    CONF_HOLD_SECONDS,
+    CONF_SERIAL,
+    DEFAULT_HOLD_SECONDS,
+    DEFAULT_PORT,
+    DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
+)
+from .coordinator import SolisCoordinator
 from .forecast import fetch_forecast
 from .solis import SolisClient
 
@@ -26,16 +34,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception as exc:  # noqa: BLE001 - pysolarmanv5 raises broadly
             raise UpdateFailed(str(exc)) from exc
 
-    coordinator = DataUpdateCoordinator(
-        hass, _LOGGER, name=DOMAIN,
+    coordinator = SolisCoordinator(
+        hass, name=DOMAIN, update_method=_update,
         update_interval=timedelta(
             seconds=entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)),
-        update_method=_update)
+        hold_seconds=entry.data.get(CONF_HOLD_SECONDS, DEFAULT_HOLD_SECONDS))
     await coordinator.async_config_entry_first_refresh()
 
     async def _update_forecast():
         try:
-            return await hass.async_add_executor_job(fetch_forecast)
+            return await hass.async_add_executor_job(
+                fetch_forecast, hass.config.latitude, hass.config.longitude)
         except Exception as exc:  # noqa: BLE001 - network errors of every shape
             raise UpdateFailed(str(exc)) from exc
 

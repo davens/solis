@@ -18,8 +18,8 @@ import sys
 import urllib.parse
 import zoneinfo
 
-sys.path.insert(0, "<scratchpad>"
-                   "38294452-6dce-46fa-8280-da24a44607fc/scratchpad")
+# The `ha` REST helper lives outside the repo; point HA_HELPER_DIR at its folder.
+sys.path.insert(0, os.environ["HA_HELPER_DIR"])
 import ha  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))

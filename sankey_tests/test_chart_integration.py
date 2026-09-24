@@ -2,8 +2,8 @@
 
 Composes the three v2 pieces for the exact configuration that will ship:
 
-    flows.decompose()   the physics  -- five readings to twelve directed flows
-    layout_v2           the graph    -- 8 nodes, 12 links, 2 sections
+    flows.decompose()   the physics  -- six readings to fifteen directed flows
+    layout_v2           the graph    -- 9 nodes, 15 links, 2 sections
     allocator.allocate  the card     -- a port of ha-sankey-chart 6.3.0
 
 Nothing here touches Home Assistant, the network, or the live dashboard; it is
@@ -23,7 +23,7 @@ node and link order. The headline bug was grid->battery resolving to exactly
 0.0 and rendering as an invisible ribbon, indistinguishable from a link that
 was never declared.
 
-v2 gives all twelve source->sink links a `value:` pointing at a per-flow daily
+v2 gives all fifteen source->sink links a `value:` pointing at a per-flow daily
 utility_meter, so the card resolves
 
     min(parent_remainder, child_remainder, value_state)
@@ -59,6 +59,7 @@ BAT_IN = layout.BAT_IN
 EXPORT = layout.EXPORT
 HOUSE = layout.HOUSE
 TESLA = layout.TESLA
+AIRCON = layout.AIRCON
 INVERTER = layout.INVERTER
 
 SOURCE_NODE = {"solar": SOLAR, "battery": BAT_OUT, "grid": GRID_IN}
@@ -69,8 +70,8 @@ SOURCE_NODE = {"solar": SOLAR, "battery": BAT_OUT, "grid": GRID_IN}
 # rather than reusing layout_v2._SINK_SLUG precisely so that it is an
 # INDEPENDENT statement of the correspondence -- reusing the private dict would
 # make the mapping test below agree with itself and prove nothing.
-SINK_NODE = {"house": HOUSE, "tesla": TESLA, "battery": BAT_IN,
-             "export": EXPORT, "inverter": INVERTER}
+SINK_NODE = {"house": HOUSE, "tesla": TESLA, "aircon": AIRCON,
+             "battery": BAT_IN, "export": EXPORT, "inverter": INVERTER}
 
 # (source node, sink node) -> the flows.py key that link carries.
 LINK_FLOW_KEY = {
@@ -135,16 +136,23 @@ def states_for(counters, flows):
 #       looks complete and proves nothing.
 # --------------------------------------------------------------------------
 
-# (hours, solar W, battery W (+charging), house W incl. car, tesla W)
+# (hours, solar W, battery W (+charging), house W incl. car AND air con,
+#  tesla W, aircon W)
+#
+# The air-con column was added with the node on 2026-09-11, and it is non-zero
+# on four of the eight samples for the reason stated just above about the
+# Inverter node: three links exercised only at zero are the kind of coverage
+# that looks complete and proves nothing. It never exceeds `house - tesla`, so
+# the A <= house - T clamp does not bite here; flows.py owns that clamp.
 BALANCED_PROFILE = (
-    (5.0, 0.0, 2500.0, 700.0, 0.0),        # 23:30-05:30 timed grid charge
-    (1.0, 0.0, 0.0, 650.0, 0.0),           # pre-dawn
-    (2.0, 900.0, 400.0, 800.0, 0.0),       # morning ramp
-    (3.0, 3800.0, 1200.0, 900.0, 0.0),     # late morning
-    (4.0, 5200.0, 400.0, 1100.0, 0.0),     # midday export
-    (2.0, 2600.0, 0.0, 10400.0, 7000.0),   # afternoon, car on a 7 kW slot
-    (3.0, 400.0, -1200.0, 2100.0, 0.0),    # evening, battery covers load
-    (4.0, 0.0, -300.0, 900.0, 0.0),        # night
+    (5.0, 0.0, 2500.0, 700.0, 0.0, 0.0),        # 23:30-05:30 timed grid charge
+    (1.0, 0.0, 0.0, 650.0, 0.0, 0.0),           # pre-dawn
+    (2.0, 900.0, 400.0, 800.0, 0.0, 0.0),       # morning ramp
+    (3.0, 3800.0, 1200.0, 900.0, 0.0, 250.0),   # late morning, air con starts
+    (4.0, 5200.0, 400.0, 1100.0, 0.0, 600.0),   # midday export, air con on sun
+    (2.0, 2600.0, 0.0, 10400.0, 7000.0, 700.0),  # afternoon, car on a 7 kW slot
+    (3.0, 400.0, -1200.0, 2100.0, 0.0, 450.0),  # evening, battery covers load
+    (4.0, 0.0, -300.0, 900.0, 0.0, 0.0),        # night
 )
 
 # The same day with ~106 W of fixed parasitic held back on every sample -- the
@@ -162,14 +170,15 @@ def simulate(profile, parasitic=0.0):
     """
     counters = {node: 0.0 for node in COUNTER_NODES}
     flows = {key: 0.0 for key in FLOWS}
-    for hours, solar, battery, house, tesla in profile:
+    for hours, solar, battery, house, tesla, aircon in profile:
         grid = house + battery - solar + parasitic
         counters[SOLAR] += solar * hours / 1000.0
         counters[BAT_IN] += max(0.0, battery) * hours / 1000.0
         counters[BAT_OUT] += max(0.0, -battery) * hours / 1000.0
         counters[GRID_IN] += max(0.0, grid) * hours / 1000.0
         counters[EXPORT] += max(0.0, -grid) * hours / 1000.0
-        for key, watts in decompose(solar, battery, grid, house, tesla).items():
+        for key, watts in decompose(solar, battery, grid, house, tesla,
+                                    aircon).items():
             flows[key] += watts * hours / 1000.0
     return counters, flows
 
@@ -189,22 +198,24 @@ LOSSY_NODE_TOTALS = node_totals(LOSSY_FLOWS)
 # 1. The layout itself -- BRIEF_V2.md section 7's per-link and per-node gate
 # ==========================================================================
 
-def test_the_layout_is_twelve_links_and_nothing_else():
+def test_the_layout_is_fifteen_links_and_nothing_else():
     """BRIEF_V2.md section 1 says 16. It was 15, then 14 when "Stored" went on
-    2026-08-30, and is now 12 -- the device split went the same day and every
-    remaining link is a measured source->sink flow. Sections 4 and 7 of the
-    brief always said 12 source->sink; the 16 was an off-by-one in section 1."""
-    assert len(layout.SOURCE_SINK_LINKS) == 12
-    assert len(layout.LINKS) == 12
-    assert len(layout.FLOW_METERS) == 12
+    2026-08-30, then 12 when the device split went the same day, and is 15
+    again since air con returned as a first-class sink on 2026-09-11 -- one new
+    link per source. Every link is still a measured source->sink flow; the
+    brief's 16 was an off-by-one in section 1 and is unrelated."""
+    assert len(layout.SOURCE_SINK_LINKS) == 15
+    assert len(layout.LINKS) == 15
+    assert len(layout.FLOW_METERS) == 15
 
 
 def test_every_flow_key_has_exactly_one_link_and_vice_versa():
-    """The physics and the picture must enumerate the same twelve flows. If
+    """The physics and the picture must enumerate the same fifteen flows. If
     flows.py gains a key and the layout does not, the ribbon is never drawn and
-    nothing else in this file would notice."""
+    nothing else in this file would notice -- which is exactly what would have
+    happened to the three air-con flows."""
     assert set(LINK_FLOW_KEY.values()) == set(FLOWS)
-    assert len(LINK_FLOW_KEY) == 12
+    assert len(LINK_FLOW_KEY) == 15
     declared = {tuple(p) for p in layout.SOURCE_SINK_LINKS}
     assert declared == set(LINK_FLOW_KEY)
 
@@ -233,7 +244,8 @@ def test_meter_names_follow_the_documented_scheme():
     assert layout.flow_meter(BAT_OUT, TESLA) == "sensor.flow_battery_to_tesla_daily"
     assert layout.flow_meter(GRID_IN, BAT_IN) == "sensor.flow_grid_to_battery_daily"
     assert layout.flow_meter(SOLAR, EXPORT) == "sensor.flow_solar_to_grid_daily"
-    assert len(set(layout.FLOW_METERS)) == 12
+    assert layout.flow_meter(GRID_IN, AIRCON) == "sensor.flow_grid_to_aircon_daily"
+    assert len(set(layout.FLOW_METERS)) == 15
 
 
 def test_no_battery_to_export_link_is_declared():
@@ -261,14 +273,15 @@ def test_house_no_longer_feeds_tesla():
     assert layout.sections_of()[TESLA] == 1
 
 
-def test_house_tesla_and_inverter_are_the_sum_of_their_inbound_meters():
+def test_house_tesla_aircon_and_inverter_are_the_sum_of_their_inbound_meters():
     """The v2 node-identity decision (BRIEF_V2.md section 1). It is what makes
-    House exclude the Tesla without a subtract_entities trick, and it is why
-    House is a slug rather than house_consumption_today."""
+    House exclude the Tesla AND the air con without a subtract_entities trick,
+    and it is why House is a slug rather than house_consumption_today."""
     by_id = {n["id"]: n for n in layout.NODES}
     for node_id, source_nodes in (
         (HOUSE, (SOLAR, BAT_OUT, GRID_IN)),
         (TESLA, (SOLAR, BAT_OUT, GRID_IN)),
+        (AIRCON, (SOLAR, BAT_OUT, GRID_IN)),
         (INVERTER, (SOLAR, BAT_OUT, GRID_IN)),
     ):
         node = by_id[node_id]
@@ -307,7 +320,7 @@ def test_two_sections_exactly_as_designed():
 
 def test_every_sink_is_a_terminus():
     sinks = {l["target"] for l in layout.LINKS}
-    assert sinks == {HOUSE, TESLA, BAT_IN, EXPORT, INVERTER}
+    assert sinks == {HOUSE, TESLA, AIRCON, BAT_IN, EXPORT, INVERTER}
     for sink in sinks:
         assert [l for l in layout.LINKS if l["source"] == sink] == []
 
@@ -426,7 +439,8 @@ def test_the_lossy_day_still_closes_on_every_sink_and_source():
 def test_the_energy_balance_of_the_simulated_day_closes():
     supply = SIM_COUNTERS[SOLAR] + SIM_COUNTERS[GRID_IN] + SIM_COUNTERS[BAT_OUT]
     sink = SIM_COUNTERS[EXPORT] + SIM_COUNTERS[BAT_IN] + SIM_NODE_TOTALS["house"] \
-        + SIM_NODE_TOTALS["tesla"] + SIM_NODE_TOTALS["inverter"]
+        + SIM_NODE_TOTALS["tesla"] + SIM_NODE_TOTALS["aircon"] \
+        + SIM_NODE_TOTALS["inverter"]
     assert supply == pytest.approx(sink, abs=1e-9)
 
 
@@ -458,9 +472,10 @@ def test_all_decomposed_flows_are_non_negative():
 
 def test_instantaneous_decomposition_matches_the_hourly_integration():
     total = 0.0
-    for hours, solar, battery, house, tesla in BALANCED_PROFILE:
+    for hours, solar, battery, house, tesla, aircon in BALANCED_PROFILE:
         grid = house + battery - solar
-        total += sum(decompose(solar, battery, grid, house, tesla).values()) * hours / 1000.0
+        total += sum(decompose(solar, battery, grid, house, tesla,
+                               aircon).values()) * hours / 1000.0
     assert total == pytest.approx(sum(SIM_FLOWS.values()), abs=1e-9)
 
 
@@ -587,6 +602,7 @@ def test_clamp_is_the_minimum_of_all_three_terms_everywhere():
     node_state = dict(SIM_STATES)
     node_state[HOUSE] = SIM_NODE_TOTALS["house"]
     node_state[TESLA] = SIM_NODE_TOTALS["tesla"]
+    node_state[AIRCON] = SIM_NODE_TOTALS["aircon"]
     node_state[INVERTER] = SIM_NODE_TOTALS["inverter"]
     for source, sink in layout.SOURCE_SINK_LINKS:
         key = flow_key(source, sink)
@@ -615,9 +631,10 @@ def test_negative_flow_value_DOES_produce_a_negative_ribbon():
 
 
 def test_decompose_never_emits_a_negative_flow_so_the_hazard_stays_theoretical():
-    for hours, solar, battery, house, tesla in BALANCED_PROFILE:
+    for hours, solar, battery, house, tesla, aircon in BALANCED_PROFILE:
         grid = house + battery - solar
-        assert all(v >= 0.0 for v in decompose(solar, battery, grid, house, tesla).values())
+        assert all(v >= 0.0 for v in
+                   decompose(solar, battery, grid, house, tesla, aircon).values())
 
 
 # ==========================================================================
@@ -670,13 +687,63 @@ def test_flow_meters_never_appear_as_node_totals():
 # a peer of House since v2, and House now reads house-only.
 # ==========================================================================
 
-def test_house_reads_house_only_and_excludes_the_car():
+def test_house_reads_house_only_and_excludes_the_car_and_the_air_con():
     got = resolve(SIM_STATES)
     assert SIM_NODE_TOTALS["tesla"] > 0.0
+    assert SIM_NODE_TOTALS["aircon"] > 0.0
     house = sum(got[(source, HOUSE)] for source in (SOLAR, BAT_OUT, GRID_IN))
     assert house == pytest.approx(SIM_NODE_TOTALS["house"], abs=1e-6)
-    v1_style = SIM_NODE_TOTALS["house"] + SIM_NODE_TOTALS["tesla"]
-    assert house == pytest.approx(v1_style - SIM_NODE_TOTALS["tesla"], abs=1e-6)
+    v1_style = (SIM_NODE_TOTALS["house"] + SIM_NODE_TOTALS["tesla"]
+                + SIM_NODE_TOTALS["aircon"])
+    assert house == pytest.approx(
+        v1_style - SIM_NODE_TOTALS["tesla"] - SIM_NODE_TOTALS["aircon"],
+        abs=1e-6)
+    # The whole metered house load is the three of them and nothing else, so
+    # nothing is double-counted and nothing has fallen between them.
+    metered = sum(hours * house_w / 1000.0
+                  for hours, _s, _b, house_w, _t, _a in BALANCED_PROFILE)
+    assert v1_style == pytest.approx(metered, abs=1e-6)
+
+
+def test_the_aircon_node_exists_is_a_section_1_terminus_and_is_hot_pink():
+    """The new node, gated here as well as in test_layout_v2 because this file
+    is the one that asserts what the CARD would draw.
+
+    Hot pink is not decoration: CLAUDE.md records the yellow #ffd60a tried
+    first being rejected on sight, because Solar's --warning-color resolves to
+    rgb(255,166,0) on this theme and the two blurred together.
+    """
+    by_id = {n["id"]: n for n in layout.NODES}
+    assert AIRCON in by_id
+    node = by_id[AIRCON]
+    assert node["name"] == "Air con"
+    assert node["section"] == 1
+    assert node["color"] == "#ff69b4"
+    assert node.get("type", "entity") == "entity"
+
+    inbound = [l for l in layout.LINKS if l["target"] == AIRCON]
+    assert len(inbound) == 3
+    assert {l["source"] for l in inbound} == {SOLAR, BAT_OUT, GRID_IN}
+    assert [l for l in layout.LINKS if l["source"] == AIRCON] == []
+    # Not a child of House, and House is not a child of it: either shape would
+    # double-count the air con and would need a two-section span to draw.
+    assert not any({l["source"], l["target"]} == {HOUSE, AIRCON}
+                   for l in layout.LINKS)
+    assert layout.check_spans() == []
+
+
+def test_the_aircon_ribbons_are_actually_drawn_and_report_their_source_mix():
+    """Guard against a vacuous profile. Three links exercised only at zero look
+    exactly like three links that work."""
+    got = resolve(SIM_STATES)
+    drawn = {s: got[(s, AIRCON)] for s in (SOLAR, BAT_OUT, GRID_IN)}
+    assert sum(drawn.values()) == pytest.approx(SIM_NODE_TOTALS["aircon"],
+                                                abs=1e-9)
+    assert SIM_NODE_TOTALS["aircon"] > 1.0, (
+        "BALANCED_PROFILE runs no air con; the new ribbons are untested")
+    assert sum(1 for v in drawn.values() if v > 1e-9) >= 2, (
+        "only one source feeds Air con; the per-source split the node exists "
+        "to show is not being exercised: %r" % (drawn,))
 
 
 def test_battery_in_fills_exactly_from_its_two_sources():
@@ -935,26 +1002,50 @@ def test_greedy_is_NOT_order_independent():
     assert len(greedy_results) > 1, "greedy should have been order sensitive"
 
 
-def test_greedy_is_node_order_insensitive_HERE_and_still_wrong():
-    """A nuance worth pinning rather than papering over.
+def test_greedy_is_node_order_sensitive_even_on_a_balanced_day_and_still_wrong():
+    """Rewritten 2026-09-11. The air-con node invalidated what this used to say.
 
-    Node order only matters to greedy when a source is over-supplied relative
-    to the sinks it can reach. The balanced profile closes exactly, so greedy is
-    stable under node permutation on it -- and still draws the wrong ribbons.
-    Node order is not the only greedy artefact, and a test that only checked
-    node-order stability would have passed v1 while v1 was visibly wrong.
+    It used to assert that greedy is node-order INSENSITIVE here, on the
+    reasoning that node order only bites when a source is over-supplied
+    relative to the sinks it can reach, and that the balanced profile closes
+    exactly. The second half of that was never the whole story, and adding a
+    third AC sink is what exposed it: House and Air con now compete for the
+    same supply, so whichever source is walked first takes House and a later
+    one is left holding Air con. Measured on this profile, the six source
+    orderings produce FIVE distinct pictures -- e.g. battery-out's 4.8 kWh goes
+    entirely to House under one ordering and entirely to Air con under another,
+    from identical energy.
+
+    The claim is therefore inverted and tightened rather than deleted, and the
+    part that carried the original point is untouched: greedy draws the wrong
+    ribbons in EVERY ordering, so node-order stability was never the property
+    worth testing for. `test_greedy_node_order_changes_the_story_when_a_source_
+    is_over_supplied` still holds; over-supply is one way to provoke this, not
+    the only one.
     """
-    results = set()
+    results = {}
     for nodes in _source_node_permutations():
         got = resolve(SIM_STATES, nodes=nodes, links=greedy_links())
-        results.add(tuple(sorted((k, round(v, 6)) for k, v in got.items())))
-    assert len(results) == 1
+        results[tuple(sorted((k, round(v, 6)) for k, v in got.items()))] = got
+    assert len(results) > 1, (
+        "greedy drew one picture from every source ordering; it is supposed to "
+        "be the order-sensitive control")
 
-    greedy = resolve(SIM_STATES, links=greedy_links())
-    wrong = [(s_, t) for s_, t in layout.SOURCE_SINK_LINKS
-             if not math.isclose(greedy[(s_, t)], SIM_FLOWS[flow_key(s_, t)],
-                                 abs_tol=1e-6)]
-    assert wrong, "stable AND correct would make this test pointless"
+    # Wrong in every ordering, not merely in the default one.
+    for got in results.values():
+        wrong = [(s_, t) for s_, t in layout.SOURCE_SINK_LINKS
+                 if not math.isclose(got[(s_, t)], SIM_FLOWS[flow_key(s_, t)],
+                                     abs_tol=1e-6)]
+        assert wrong, "an ordering that is both greedy and correct would make "\
+                      "the per-link values pointless"
+
+    # ...and the values collapse the same sweep to exactly one picture. Without
+    # this the test would only say greedy is unstable, not that v2 fixes it.
+    stable = set()
+    for nodes in _source_node_permutations():
+        got = resolve(SIM_STATES, nodes=nodes)
+        stable.add(tuple(sorted((k, round(v, 6)) for k, v in got.items())))
+    assert len(stable) == 1
 
 
 def test_greedy_node_order_changes_the_story_when_a_source_is_over_supplied():

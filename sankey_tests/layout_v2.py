@@ -110,6 +110,8 @@ Battery out/in and Grid import/export keep their existing daily counters.
 import copy
 
 __all__ = [
+    "AIRCON",
+    "AIRCON_COLOR",
     "BAT_IN",
     "BAT_OUT",
     "COLORS",
@@ -147,9 +149,10 @@ EXPORT = "sensor.solis_inverter_grid_export_today"
 # Node ids that are slugs rather than entities.
 HOUSE = "house"
 TESLA = "tesla"
+AIRCON = "aircon"
 INVERTER = "inverter"
 
-# The 12 daily utility_meter helpers, one per source->sink flow. Naming is
+# The 15 daily utility_meter helpers, one per source->sink flow. Naming is
 # `sensor.flow_<source>_to_<sink>_daily`, where `battery` means discharge on
 # the source side and charge on the sink side, and `grid` means import on the
 # source side and export on the sink side. Each is fed by a Riemann
@@ -158,6 +161,7 @@ _SOURCE_SLUG = {SOLAR: "solar", BAT_OUT: "battery", GRID_IN: "grid"}
 _SINK_SLUG = {
     HOUSE: "house",
     TESLA: "tesla",
+    AIRCON: "aircon",
     BAT_IN: "battery",
     EXPORT: "grid",
     INVERTER: "inverter",
@@ -178,12 +182,15 @@ SOURCE_SINK_LINKS = [
     (SOLAR, BAT_IN),
     (SOLAR, HOUSE),
     (SOLAR, TESLA),
+    (SOLAR, AIRCON),
     (SOLAR, INVERTER),
     (BAT_OUT, HOUSE),
     (BAT_OUT, TESLA),
+    (BAT_OUT, AIRCON),
     (BAT_OUT, INVERTER),
     (GRID_IN, TESLA),
     (GRID_IN, HOUSE),
+    (GRID_IN, AIRCON),
     (GRID_IN, BAT_IN),
     (GRID_IN, INVERTER),
 ]
@@ -227,6 +234,12 @@ EXPORT_COLOR = "#a78bfa"
 HOUSE_COLOR = "var(--primary-color)"
 TESLA_COLOR = "#ffffff"
 
+# Hot pink, straight from CLAUDE.md's colour table: the owner picked it, and
+# the yellow #ffd60a tried first was rejected on sight because Solar's
+# --warning-color resolves to rgb(255,166,0) on this theme and the two blurred
+# together. Do not retry a yellow or an amber here.
+AIRCON_COLOR = "#ff69b4"
+
 # New in v2. The Inverter node is conversion loss and parasitic draw -- energy
 # that arrived and did no work. Neutral grey is the only choice left that
 # carries the right meaning and cannot be confused with a real flow: it is the
@@ -243,6 +256,7 @@ COLORS = {
     GRID_IN: GRID_IN_COLOR,
     HOUSE: HOUSE_COLOR,
     TESLA: TESLA_COLOR,
+    AIRCON: AIRCON_COLOR,
     BAT_IN: BATTERY_COLOR,
     EXPORT: EXPORT_COLOR,
     INVERTER: INVERTER_COLOR,
@@ -261,7 +275,10 @@ NODES = [
     {"id": BAT_OUT, "name": "Battery out", "section": 0, "color": BATTERY_COLOR},
     {"id": GRID_IN, "name": "Grid import", "section": 0, "color": GRID_IN_COLOR},
 
-    # House / Tesla / Inverter are each the sum of their own inbound meters.
+    # House / Tesla / Air con / Inverter are each the sum of their own inbound
+    # meters. House keeps its name but is now the rest of the house: both the
+    # car and the air con are carved out of it, exactly as the owner asked on
+    # 2026-09-11 ("house stays named house, but is essentially rest of house").
     {
         "id": HOUSE,
         "name": "House",
@@ -277,6 +294,14 @@ NODES = [
         "color": TESLA_COLOR,
         "entity_id": flow_meter(SOLAR, TESLA),
         "add_entities": [flow_meter(BAT_OUT, TESLA), flow_meter(GRID_IN, TESLA)],
+    },
+    {
+        "id": AIRCON,
+        "name": "Air con",
+        "section": 1,
+        "color": AIRCON_COLOR,
+        "entity_id": flow_meter(SOLAR, AIRCON),
+        "add_entities": [flow_meter(BAT_OUT, AIRCON), flow_meter(GRID_IN, AIRCON)],
     },
     {"id": BAT_IN, "name": "Battery in", "section": 1, "color": BATTERY_COLOR},
     {"id": EXPORT, "name": "Grid export", "section": 1, "color": EXPORT_COLOR},

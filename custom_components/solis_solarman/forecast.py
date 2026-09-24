@@ -16,9 +16,6 @@ import urllib.request
 from datetime import date, datetime, time as dtime, timedelta
 from zoneinfo import ZoneInfo
 
-# Site .
-LAT, LON = REDACTED_LAT, REDACTED_LON
-
 # (azimuth, tilt, share): Open-Meteo azimuth, 0 = south, -90 = east, 90 = west.
 # Geometry from the owner's roof survey - two planes, different pitches.
 PLANES = [
@@ -54,9 +51,9 @@ _memo = None
 _weather_memo = None
 
 
-def _gti(azimuth, tilt):
+def _gti(azimuth, tilt, latitude, longitude):
     """{model: {timestamp: W/m2}} of global tilted irradiance for one plane."""
-    url = (f"{FORECAST_API}?latitude={LAT}&longitude={LON}"
+    url = (f"{FORECAST_API}?latitude={latitude}&longitude={longitude}"
            f"&hourly=global_tilted_irradiance&tilt={tilt}&azimuth={azimuth}"
            f"&timezone=Europe%2FLondon&models={','.join(MODELS)}&forecast_days=3")
     with urllib.request.urlopen(url, timeout=15) as response:
@@ -69,14 +66,16 @@ def _gti(azimuth, tilt):
     return out
 
 
-def _series():
+def _series(latitude, longitude):
     """{model: {day: [hourly W/m2, ...]}}, irradiance weighted across the planes."""
     global _memo
-    if _memo and time.time() - _memo["at"] < CACHE_SECONDS:
+    location = (latitude, longitude)
+    if (_memo and _memo["location"] == location
+            and time.time() - _memo["at"] < CACHE_SECONDS):
         return _memo["series"]
     stamps = {}
     for azimuth, tilt, share in PLANES:
-        for model, readings in _gti(azimuth, tilt).items():
+        for model, readings in _gti(azimuth, tilt, latitude, longitude).items():
             for stamp, watts in readings.items():
                 per_model = stamps.setdefault(model, {})
                 per_model[stamp] = per_model.get(stamp, 0) + watts * share
@@ -84,7 +83,7 @@ def _series():
     for model, readings in stamps.items():
         for stamp, watts in sorted(readings.items()):
             series.setdefault(model, {}).setdefault(stamp[:10], []).append(watts)
-    _memo = {"at": time.time(), "series": series}
+    _memo = {"at": time.time(), "location": location, "series": series}
     return series
 
 
@@ -195,16 +194,18 @@ def _daylight_sky(payload, day, sunrise, sunset):
     return _sky(code, cloud)
 
 
-def _tomorrow_weather():
+def _tomorrow_weather(latitude, longitude):
     """{summary, sunrise, sunset} for tomorrow, or None. Keyed on the target
     date, not just age - a memo built at 23:55 is answering for the wrong day
     ten minutes later."""
     global _weather_memo
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    location = (latitude, longitude)
     if (_weather_memo and _weather_memo["day"] == tomorrow
+            and _weather_memo["location"] == location
             and time.time() - _weather_memo["at"] < CACHE_SECONDS):
         return _weather_memo["weather"]
-    url = (f"{FORECAST_API}?latitude={LAT}&longitude={LON}"
+    url = (f"{FORECAST_API}?latitude={latitude}&longitude={longitude}"
            "&timezone=Europe%2FLondon&forecast_days=2"
            "&daily=weather_code,cloud_cover_mean,sunrise,sunset"
            "&hourly=cloud_cover,weather_code")
@@ -226,18 +227,26 @@ def _tomorrow_weather():
         "sunrise": (field("sunrise") or "")[-5:],
         "sunset": (field("sunset") or "")[-5:],
     }
-    _weather_memo = {"at": time.time(), "day": tomorrow, "weather": weather}
+    _weather_memo = {
+        "at": time.time(), "day": tomorrow, "location": location,
+        "weather": weather,
+    }
     return weather
 
 
-def fetch_forecast():
-    """Everything the forecast sensors need, in one synchronous call."""
-    series = _series()
+def fetch_forecast(latitude, longitude):
+    """Everything the forecast sensors need, in one synchronous call.
+
+    HA's home location is rounded to 2 decimals (~1 km) before it is sent:
+    finer than the models' grids buys nothing, and the house stays private.
+    """
+    latitude, longitude = round(latitude, 2), round(longitude, 2)
+    series = _series(latitude, longitude)
     today = _day_kwh(date.today().isoformat(), series)
     tomorrow = _day_kwh((date.today() + timedelta(days=1)).isoformat(), series)
     tomorrow = tomorrow if tomorrow > 0 else None
     level, advice = _verdict(tomorrow)
-    weather = _tomorrow_weather() or {}
+    weather = _tomorrow_weather(latitude, longitude) or {}
     return {
         "forecast_today": round(today, 1) if today > 0 else None,
         "forecast_tomorrow": round(tomorrow, 1) if tomorrow else None,

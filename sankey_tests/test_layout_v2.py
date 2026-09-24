@@ -100,7 +100,7 @@ import replay  # noqa: E402
 TOL = 1e-9
 
 SOURCES = (L.SOLAR, L.BAT_OUT, L.GRID_IN)
-SINKS = (L.HOUSE, L.TESLA, L.BAT_IN, L.EXPORT, L.INVERTER)
+SINKS = (L.HOUSE, L.TESLA, L.AIRCON, L.BAT_IN, L.EXPORT, L.INVERTER)
 
 
 # --------------------------------------------------------------------------
@@ -108,17 +108,22 @@ SINKS = (L.HOUSE, L.TESLA, L.BAT_IN, L.EXPORT, L.INVERTER)
 # --------------------------------------------------------------------------
 
 
-def _prop(solar, battery, grid, house, tesla):
+def _prop(solar, battery, grid, house, tesla, aircon=0.0):
     """flows.py's decomposition, keyed by (source id, sink id) for the layout.
 
     This is the shipping physics. The translation goes through
     layout_v2.FLOW_KEY so neither side restates the other's naming.
+
+    `aircon` defaults to 0 W so that the many single-sample regime tests below
+    keep reading as five-channel statements about the regime they name. The
+    synthetic DAY passes a real profile, which is what exercises the three
+    air-con ribbons through the allocator.
     """
-    out = flows.decompose(solar, battery, grid, house, tesla)
+    out = flows.decompose(solar, battery, grid, house, tesla, aircon)
     return {pair: out[key] for pair, key in L.FLOW_KEY.items()}
 
 
-def _prop_ref(solar, battery, grid, house, tesla):
+def _prop_ref(solar, battery, grid, house, tesla, aircon=0.0):
     """BRIEF_V2.md section 2 transcribed by hand, on one instantaneous sample.
 
     Kept as an independent second opinion on flows.py, not as a fallback. See
@@ -130,8 +135,12 @@ def _prop_ref(solar, battery, grid, house, tesla):
     g = max(0.0, grid)
     e = max(0.0, -grid)
     t = min(max(0.0, tesla), max(0.0, house))
-    hr = max(0.0, house - t)
-    loss = max(0.0, (s + b + g) - (hr + t + c + e))
+    # Air con is carved out AFTER the car, so the car never moves when the
+    # air-con reading does. Transcribed in that order deliberately: reversing
+    # the two clamps here would silently stop this being an independent check.
+    a = min(max(0.0, aircon), max(0.0, house) - t)
+    hr = max(0.0, house - t - a)
+    loss = max(0.0, (s + b + g) - (hr + t + a + c + e))
 
     s2e = min(s, e)
     s1 = s - s2e
@@ -143,7 +152,8 @@ def _prop_ref(solar, battery, grid, house, tesla):
 
     flows = {pair: 0.0 for pair in L.SOURCE_SINK_LINKS}
     flows[(L.SOLAR, L.EXPORT)] = s2e
-    for sink, amount in ((L.HOUSE, hr), (L.TESLA, t), (L.BAT_IN, c), (L.INVERTER, loss)):
+    for sink, amount in ((L.HOUSE, hr), (L.TESLA, t), (L.AIRCON, a),
+                         (L.BAT_IN, c), (L.INVERTER, loss)):
         for source in SOURCES:
             if (source, sink) in flows:
                 flows[(source, sink)] += amount * share[source]
@@ -151,11 +161,12 @@ def _prop_ref(solar, battery, grid, house, tesla):
 
 
 def _integrate(samples):
-    """[(dt_seconds, solar, battery, grid, house, tesla)] -> kWh per link."""
+    """[(dt_s, solar, battery, grid, house, tesla, aircon)] -> kWh per link."""
     out = {pair: 0.0 for pair in L.SOURCE_SINK_LINKS}
-    for dt, solar, battery, grid, house, tesla in samples:
+    for dt, solar, battery, grid, house, tesla, aircon in samples:
         hours = dt / 3_600_000.0  # W*s -> kWh
-        for pair, watts in _prop(solar, battery, grid, house, tesla).items():
+        for pair, watts in _prop(solar, battery, grid, house, tesla,
+                                 aircon).items():
             out[pair] += watts * hours
     return out
 
@@ -163,7 +174,7 @@ def _integrate(samples):
 def _counters(samples):
     """The five daily counters the same samples would produce, kWh."""
     out = dict.fromkeys((L.SOLAR, L.BAT_OUT, L.GRID_IN, L.BAT_IN, L.EXPORT), 0.0)
-    for dt, solar, battery, grid, _house, _tesla in samples:
+    for dt, solar, battery, grid, _house, _tesla, _aircon in samples:
         hours = dt / 3_600_000.0
         out[L.SOLAR] += max(0.0, solar) * hours
         out[L.BAT_OUT] += max(0.0, -battery) * hours
@@ -183,16 +194,24 @@ def _counters(samples):
 #   4-5  midday: strong sun, exporting, battery charging, Tesla on solar
 #   6-7  evening: sun fading, battery carrying the house, small import
 #   8    late: battery and grid together carrying a Tesla top-up
+#
+# The air-con column was added 2026-09-11 with the node. It runs through the
+# afternoon and evening and is off overnight, which is what an LG split unit
+# actually does, and it is non-zero in four of the eight samples so the three
+# air-con ribbons are exercised by every allocator test in this file rather
+# than passing trivially at zero. It never exceeds `house - tesla`, so the
+# A <= house - T clamp does not bite here -- flows.py owns that clamp and
+# test_flows.py owns testing it; this fixture is about the picture.
 DAY = [
-    # dt(s)  solar  battery   grid   house  tesla
-    (3600.0, 0.0, 2500.0, 8300.0, 5700.0, 5000.0),
-    (3600.0, 0.0, 2500.0, 3300.0, 700.0, 0.0),
-    (3600.0, 0.0, -900.0, 0.0, 850.0, 0.0),
-    (3600.0, 5800.0, 1500.0, -3500.0, 700.0, 0.0),
-    (3600.0, 6000.0, 0.0, -2000.0, 3900.0, 3200.0),
-    (3600.0, 900.0, -600.0, 300.0, 1550.0, 0.0),
-    (3600.0, 0.0, -1200.0, 400.0, 1550.0, 0.0),
-    (3600.0, 0.0, -3000.0, 1100.0, 4000.0, 3300.0),
+    # dt(s)  solar  battery   grid   house  tesla  aircon
+    (3600.0, 0.0, 2500.0, 8300.0, 5700.0, 5000.0, 0.0),
+    (3600.0, 0.0, 2500.0, 3300.0, 700.0, 0.0, 0.0),
+    (3600.0, 0.0, -900.0, 0.0, 850.0, 0.0, 0.0),
+    (3600.0, 5800.0, 1500.0, -3500.0, 700.0, 0.0, 0.0),
+    (3600.0, 6000.0, 0.0, -2000.0, 3900.0, 3200.0, 600.0),
+    (3600.0, 900.0, -600.0, 300.0, 1550.0, 0.0, 700.0),
+    (3600.0, 0.0, -1200.0, 400.0, 1550.0, 0.0, 700.0),
+    (3600.0, 0.0, -3000.0, 1100.0, 4000.0, 3300.0, 500.0),
 ]
 
 # The live states main supplied for 2026-08-30. `house` and `tesla` here are the
@@ -259,6 +278,7 @@ EXPECTED_NODES = [
     (L.GRID_IN, "Grid import", 0, "entity", "var(--error-color)"),
     (L.HOUSE, "House", 1, "entity", "var(--primary-color)"),
     (L.TESLA, "Tesla", 1, "entity", "#ffffff"),
+    (L.AIRCON, "Air con", 1, "entity", "#ff69b4"),
     (L.BAT_IN, "Battery in", 1, "entity", "var(--success-color)"),
     (L.EXPORT, "Grid export", 1, "entity", "#a78bfa"),
     (L.INVERTER, "Inverter", 1, "entity", "#6b7280"),
@@ -314,9 +334,15 @@ def test_battery_out_precedes_grid_import():
 
 
 def test_derived_nodes_are_the_sum_of_their_inbound_meters():
-    """House, Tesla and Inverter have no counter of their own (BRIEF_V2.md
-    section 1); each is its three inbound flow meters."""
-    for sink in (L.HOUSE, L.TESLA, L.INVERTER):
+    """House, Tesla, Air con and Inverter have no counter of their own
+    (BRIEF_V2.md section 1); each is its three inbound flow meters.
+
+    Air con joined on 2026-09-11 and is built the same way as the other three
+    even though a `sensor.lg_..._energy` counter exists in HA. Pointing the node
+    at that counter instead would give a box whose height disagreed with the
+    three ribbons entering it, because the ribbons are the decomposition's
+    attribution of it and the counter is the meter."""
+    for sink in (L.HOUSE, L.TESLA, L.AIRCON, L.INVERTER):
         node = _node(sink)
         inbound = [L.flow_meter(source, sink) for source in SOURCES]
         assert node["entity_id"] == inbound[0]
@@ -336,6 +362,86 @@ def test_counter_nodes_carry_no_add_or_subtract():
         assert node_id.startswith("sensor.")
 
 
+def test_the_aircon_node_is_a_section_1_terminus_fed_by_exactly_three_links():
+    """Air con, added 2026-09-11, in one place.
+
+    It is a PEER of House and Tesla, not a child of House. That shape matters
+    for three reasons, all of them recorded rather than aesthetic:
+
+    * Every link stays a single hop, so the card never synthesises the
+      unlabelled passthrough ghost that CLAUDE.md warns about. A section-2 Air
+      con fed by House would span one section from House but would force House
+      to become the whole-site total again -- the House-hub shape proposed and
+      rejected on 2026-08-30.
+    * Being a terminus is what makes the per-source colouring meaningful: the
+      three ribbons entering it say which source ran the air con, which is the
+      entire reason the node exists.
+    * Exactly three inbound links, one per source, and no outbound link at all.
+    """
+    node = _node(L.AIRCON)
+    assert node["id"] == L.AIRCON == "aircon"
+    assert node["name"] == "Air con"
+    assert node["section"] == 1
+    assert node.get("type", "entity") == "entity"
+
+    inbound = [l for l in L.LINKS if l["target"] == L.AIRCON]
+    assert len(inbound) == 3
+    assert {l["source"] for l in inbound} == set(SOURCES)
+    assert [l["value"] for l in inbound] == [
+        L.flow_meter(source, L.AIRCON) for source in
+        [l["source"] for l in inbound]]
+
+    # A terminus: nothing leaves it, so its energy cannot reappear further
+    # right and be counted twice.
+    assert [l for l in L.LINKS if l["source"] == L.AIRCON] == []
+    assert L.check_spans() == []
+
+
+def test_house_no_longer_contains_the_air_con():
+    """The carve-out, asserted on the config rather than assumed from flows.py.
+
+    House is the sum of its own three `flow_*_to_house_daily` meters and nothing
+    else. Those meters are the decomposition's House ribbons, which flows.py
+    computes as `Hr = house_load - T - A`, so the air con is already out of them
+    -- no `subtract_entities` is involved, and there must not be one. The v1
+    chart did carve the car out of House that way (CLAUDE.md, 2026-08-30), and
+    reintroducing the trick here would double-subtract.
+
+    House and Air con must also share no meter: one entity feeding both nodes
+    would put the same kilowatt-hours in two boxes.
+    """
+    house, aircon = _node(L.HOUSE), _node(L.AIRCON)
+    assert "subtract_entities" not in house
+    house_meters = [house["entity_id"]] + list(house["add_entities"])
+    aircon_meters = [aircon["entity_id"]] + list(aircon["add_entities"])
+    assert house_meters == [L.flow_meter(source, L.HOUSE) for source in SOURCES]
+    assert aircon_meters == [L.flow_meter(source, L.AIRCON) for source in SOURCES]
+    assert not set(house_meters) & set(aircon_meters)
+    # ...and no link joins the two, in either direction.
+    assert not [l for l in L.LINKS
+                if {l["source"], l["target"]} == {L.HOUSE, L.AIRCON}]
+
+
+def test_the_air_con_ribbons_are_actually_drawn_on_the_synthetic_day():
+    """Guard against a vacuous fixture.
+
+    The recorded days in section 4 have no air-con channel and hold it at 0 W,
+    which would leave all three new ribbons at zero everywhere and every
+    assertion about them passing trivially. DAY carries a real air-con profile
+    for exactly this reason, and this test fails if it is ever flattened.
+    """
+    states, day_flows, _counters = _states_for(DAY)
+    result = _alloc(states)
+    total = sum(day_flows[(source, L.AIRCON)] for source in SOURCES)
+    assert total > 1.0, "DAY runs no air con; the new ribbons are untested"
+    assert result.filled[L.AIRCON] == pytest.approx(total, abs=1e-9)
+    drawn = [source for source in SOURCES
+             if result.state(source, L.AIRCON) > 1e-9]
+    assert len(drawn) >= 2, (
+        "only %r feeds Air con on DAY; the per-source split the node exists to "
+        "show is not being exercised" % (drawn,))
+
+
 def test_no_unaccounted_node():
     """Removed 2026-08-27 at the owner's request, and BRIEF_V2.md section 6
     forbids re-adding it. The Inverter node is a named loss, not a residual
@@ -353,6 +459,7 @@ CLAUDE_MD_COLOURS = {
     L.GRID_IN: "var(--error-color)",     # most expensive flow on the chart
     L.EXPORT: "#a78bfa",                 # earns money; red was misleading
     L.TESLA: "#ffffff",                  # the owner's car is white
+    L.AIRCON: "#ff69b4",                 # owner's choice; a yellow was rejected
     L.HOUSE: "var(--primary-color)",
     L.SOLAR: "var(--warning-color)",
     L.BAT_OUT: "var(--success-color)",
@@ -379,6 +486,33 @@ def test_inverter_colour_is_unique_and_hueless():
     assert 60 <= max(red, green, blue) <= 200, "must sit clear of both black and white"
 
 
+def test_aircon_is_hot_pink_and_never_a_yellow_or_an_amber():
+    """CLAUDE.md is explicit, and the reason is measured rather than aesthetic.
+
+    Solar carries `var(--warning-color)`, which resolves to rgb(255,166,0) on
+    this theme. The yellow #ffd60a tried first was rejected on sight because the
+    two blurred together, and hot pink #ff69b4 is the owner's replacement.
+
+    So this asserts the exact value AND the property that value was chosen for:
+    the swatch must sit far from the amber Solar actually paints. `--warning-color`
+    cannot be read from a module, hence the literal, which is the resolved value
+    CLAUDE.md records.
+    """
+    colour = _node(L.AIRCON)["color"]
+    assert colour == "#ff69b4"
+    assert L.COLORS[L.AIRCON] == colour
+    red, green, blue = (int(colour[1:][i:i + 2], 16) for i in (0, 2, 4))
+    # A yellow or an amber is red+green high with blue low. Air con must not be.
+    assert not (red > 200 and green > 140 and blue < 80), (
+        "%s is a yellow/amber and will blur into Solar's rgb(255,166,0)" % colour)
+    solar_rgb = (255, 166, 0)
+    distance = sum(abs(a - b) for a, b in zip((red, green, blue), solar_rgb))
+    assert distance > 150, (
+        "%s is only %d away from Solar's resolved rgb%r"
+        % (colour, distance, solar_rgb))
+    assert colour not in [n["color"] for n in L.NODES if n["id"] != L.AIRCON]
+
+
 def test_every_node_has_a_colour():
     for node in L.NODES:
         assert node.get("color"), node["id"]
@@ -393,27 +527,31 @@ EXPECTED_LINKS = [
     (L.SOLAR, L.BAT_IN, "sensor.flow_solar_to_battery_daily"),
     (L.SOLAR, L.HOUSE, "sensor.flow_solar_to_house_daily"),
     (L.SOLAR, L.TESLA, "sensor.flow_solar_to_tesla_daily"),
+    (L.SOLAR, L.AIRCON, "sensor.flow_solar_to_aircon_daily"),
     (L.SOLAR, L.INVERTER, "sensor.flow_solar_to_inverter_daily"),
     (L.BAT_OUT, L.HOUSE, "sensor.flow_battery_to_house_daily"),
     (L.BAT_OUT, L.TESLA, "sensor.flow_battery_to_tesla_daily"),
+    (L.BAT_OUT, L.AIRCON, "sensor.flow_battery_to_aircon_daily"),
     (L.BAT_OUT, L.INVERTER, "sensor.flow_battery_to_inverter_daily"),
     (L.GRID_IN, L.TESLA, "sensor.flow_grid_to_tesla_daily"),
     (L.GRID_IN, L.HOUSE, "sensor.flow_grid_to_house_daily"),
+    (L.GRID_IN, L.AIRCON, "sensor.flow_grid_to_aircon_daily"),
     (L.GRID_IN, L.BAT_IN, "sensor.flow_grid_to_battery_daily"),
     (L.GRID_IN, L.INVERTER, "sensor.flow_grid_to_inverter_daily"),
 ]
 
 
 def test_link_count():
-    """12, one per source->sink flow. The layout went to two columns on
-    2026-08-30, so there are no structural links left at all."""
-    assert len(L.LINKS) == 12
-    assert len(L.SOURCE_SINK_LINKS) == 12
+    """15, one per source->sink flow: 12 until air con became a sink of its own
+    on 2026-09-11, which adds exactly one link per source. The layout went to
+    two columns on 2026-08-30, so there are no structural links left at all."""
+    assert len(L.LINKS) == 15
+    assert len(L.SOURCE_SINK_LINKS) == 15
     assert len(L.LINKS) == len(L.SOURCE_SINK_LINKS)
     per_source = {}
     for source, _sink in L.SOURCE_SINK_LINKS:
         per_source[source] = per_source.get(source, 0) + 1
-    assert per_source == {L.SOLAR: 5, L.BAT_OUT: 3, L.GRID_IN: 4}
+    assert per_source == {L.SOLAR: 6, L.BAT_OUT: 4, L.GRID_IN: 5}
 
 
 def test_links_are_exact_and_in_order():
@@ -446,15 +584,15 @@ def test_no_battery_to_grid_link():
 
 def test_every_source_sink_link_has_a_distinct_value_meter():
     values = [l["value"] for l in L.LINKS if "value" in l]
-    assert len(values) == 12
-    assert len(set(values)) == 12
+    assert len(values) == 15
+    assert len(set(values)) == 15
     assert set(values) == set(L.FLOW_METERS)
 
 
 def test_every_link_carries_a_value():
     """Two columns means every link is a measured source->sink flow. Nothing
     is left to the card's greedy fill order."""
-    assert len(L.LINKS) == 12
+    assert len(L.LINKS) == 15
     for link in L.LINKS:
         assert link["value"] == L.flow_meter(link["source"], link["target"])
 
@@ -493,12 +631,16 @@ def test_check_spans_catches_a_same_section_link():
 
 
 def test_sections_config():
+    """Two columns, three sources and now six sinks. Air con is the sixth, added
+    2026-09-11 as a peer of House and Tesla rather than as a second-hop child of
+    House -- which is what keeps every link a single hop and the card's
+    passthrough machinery dormant."""
     assert len(L.SECTIONS) == 2
     assert [sec["sort_by"] for sec in L.SECTIONS] == ["none", "none"]
     counts = {}
     for node in L.NODES:
         counts[node["section"]] = counts.get(node["section"], 0) + 1
-    assert counts == {0: 3, 1: 5}
+    assert counts == {0: 3, 1: 6}
 
 
 def test_no_declared_passthrough_node():
@@ -606,7 +748,7 @@ def test_every_sink_is_a_terminus():
     states, _flows, _counters = _states_for(DAY)
     result = _alloc(states)
     sinks = {link["target"] for link in L.LINKS}
-    assert sinks == {L.HOUSE, L.TESLA, L.BAT_IN, L.EXPORT, L.INVERTER}
+    assert sinks == {L.HOUSE, L.TESLA, L.AIRCON, L.BAT_IN, L.EXPORT, L.INVERTER}
     for sink in sinks:
         assert [l for l in L.LINKS if l["source"] == sink] == []
     assert sum(result.filled.get(n, 0.0) for n in sinks) == pytest.approx(
@@ -646,7 +788,7 @@ def test_zero_everything_draws_nothing_and_raises_nothing():
 def test_a_zero_sink_strands_nothing():
     """A day with no car at all: Tesla's three meters are zero, its node state
     is zero, and every other ribbon is unaffected."""
-    no_car = [(dt, s, b, g, h, 0.0) for dt, s, b, g, h, _t in DAY]
+    no_car = [(dt, s, b, g, h, 0.0, a) for dt, s, b, g, h, _t, a in DAY]
     states, flows, counters = _states_for(no_car)
     result = _alloc(states)
     for source in SOURCES:
@@ -665,7 +807,7 @@ def test_live_daily_states():
     per-link meters are manufactured from a sample sequence that integrates to
     them."""
     scale = LIVE_COUNTERS[L.SOLAR] / _counters(DAY)[L.SOLAR]
-    samples = [(dt, s * scale, b, g, h, t) for dt, s, b, g, h, t in DAY]
+    samples = [(dt, s * scale, b, g, h, t, a) for dt, s, b, g, h, t, a in DAY]
     states, flows, counters = _states_for(samples)
     assert counters[L.SOLAR] == pytest.approx(LIVE_COUNTERS[L.SOLAR], abs=1e-9)
 
@@ -755,8 +897,8 @@ def _strip_values(links):
 def test_permutation_space_sizes():
     """Pin the sweep sizes so a silently shrinking sweep is a failure."""
     nodes, links, _ = L.build()
-    assert sum(1 for _ in _node_permutations(nodes)) == 720     # 3! * 5!
-    assert sum(1 for _ in _link_permutations(links)) == 17_280  # 5! * 3! * 4!
+    assert sum(1 for _ in _node_permutations(nodes)) == 4_320   # 3! * 6!
+    assert sum(1 for _ in _link_permutations(links)) == 2_073_600  # 6! * 4! * 5!
 
 
 def test_node_order_never_changes_the_allocation():
@@ -766,34 +908,62 @@ def test_node_order_never_changes_the_allocation():
     for permuted in _node_permutations(nodes):
         seen.add(_canon(_alloc(states, permuted, links)))
         count += 1
-    assert count == 720
+    assert count == 4_320
     assert len(seen) == 1
 
 
 def test_link_order_never_changes_the_allocation():
+    """Still exhaustive, and deliberately so.
+
+    Air con added one link per source on 2026-09-11, taking the space from
+    5!*3!*4! = 17,280 to 6!*4!*5! = 2,073,600 -- a 120x sweep and about four
+    minutes of wall clock. Sampling it would have been the easy way out and
+    would have made the claim weaker than it was before the node existed, so it
+    stays exhaustive. If it ever has to be cut down, cut the DAY fixture, not
+    the sweep.
+    """
     states, _flows, _c = _states_for(DAY)
     nodes, links, _ = L.build()
     seen, count = set(), 0
     for permuted in _link_permutations(links):
         seen.add(_canon(_alloc(states, nodes, permuted)))
         count += 1
-    assert count == 17_280
+    assert count == 2_073_600
     assert len(seen) == 1
 
 
+def _random_link_order(links, rng):
+    """One uniformly random point in the link-permutation space.
+
+    Drawn rather than indexed. Before air con the space was 17,280 orderings and
+    `list(_link_permutations(links))` was a reasonable way to sample it; it is
+    now 2,073,600, and materialising that costs hundreds of megabytes and most
+    of a minute before the first allocation runs. Shuffling each source's own
+    group is the same distribution over the same space -- `_link_permutations`
+    is exactly the product of the per-source permutations -- at no memory cost.
+    """
+    out = []
+    for _source, group in _links_grouped(links):
+        group = list(group)
+        rng.shuffle(group)
+        out.extend(group)
+    return out
+
+
 def test_joint_node_and_link_order_never_changes_the_allocation():
-    """The full joint space is 4,320 * 34,560 = 149,299,200, which is not
-    runnable. This is a seeded random sample of it."""
+    """The full joint space is 4,320 * 2,073,600 = 8,957,952,000, which is not
+    runnable. This is a seeded random sample of it, at the same sample count as
+    before air con widened the space."""
     states, _flows, _c = _states_for(DAY)
     nodes, links, _ = L.build()
     node_space = list(_node_permutations(nodes))
-    link_space = list(_link_permutations(links))
     rng = random.Random(20260830)
     seen = set()
     for _ in range(4_000):
         seen.add(
             _canon(
-                _alloc(states, rng.choice(node_space), rng.choice(link_space))
+                _alloc(states, rng.choice(node_space),
+                       _random_link_order(links, rng))
             )
         )
     assert len(seen) == 1
@@ -803,19 +973,28 @@ def test_without_per_link_values_the_order_does_change_it():
     """The control. v1 had no `value` key and the same sweep collapsed ten
     distinct allocations into one only after the orders were fixed by hand. If
     this test ever finds a single allocation, the sweeps above are proving
-    nothing."""
+    nothing.
+
+    Walks the same 2,073,600-ordering space as the test above but stops at the
+    second distinct allocation, because the claim here is existential where that
+    one is universal -- two different pictures from the same energy is the whole
+    finding. A run that cannot find them still sweeps the space exhaustively
+    before failing.
+    """
     states, _flows, _c = _states_for(DAY)
     nodes, links, _ = L.build()
     bare = _strip_values(links)
     seen = set()
     for permuted in _link_permutations(bare):
         seen.add(_canon(_alloc(states, nodes, permuted)))
+        if len(seen) > 1:
+            break
     assert len(seen) > 1
 
 
 def test_order_invariance_holds_on_the_live_numbers_too():
     scale = LIVE_COUNTERS[L.SOLAR] / _counters(DAY)[L.SOLAR]
-    samples = [(dt, s * scale, b, g, h, t) for dt, s, b, g, h, t in DAY]
+    samples = [(dt, s * scale, b, g, h, t, a) for dt, s, b, g, h, t, a in DAY]
     states, _flows, _c = _states_for(samples)
     nodes, links, _ = L.build()
     seen = set()
@@ -913,8 +1092,16 @@ def _replay_states(day, tesla_watts=None, require_tesla=True):
                 if require_tesla:
                     continue
                 car = 0.0
+        # Air con is 0 W here and that is a HOLD, not a reading: no capture
+        # carries the channel (fixtures/replay.py, ALL_CHANNELS). It is safe
+        # for everything this section asserts, because none of those quantities
+        # can be moved by the air-con reading -- the sources, Export, Battery
+        # in, Inverter and Tesla are all provably blind to it, which
+        # test_replay_v2.py demonstrates on these same four days. What it is
+        # NOT safe for is a claim about House or Air con individually, and this
+        # section makes none.
         samples.append((dt, v["solar"], v["battery"], v["grid"], house,
-                        min(max(0.0, car), max(0.0, house))))
+                        min(max(0.0, car), max(0.0, house)), 0.0))
     return _states_for(samples)
 
 
@@ -1214,12 +1401,12 @@ def test_string_numbers_are_accepted():
 
 
 def test_flow_key_bridges_the_layout_to_flows_py():
-    """The twelve links this layout draws and the twelve flows flows.py
-    computes must be the same twelve, named two different ways. Neither module
+    """The fifteen links this layout draws and the fifteen flows flows.py
+    computes must be the same fifteen, named two different ways. Neither module
     restates the other's naming; FLOW_KEY is the single mapping."""
     assert set(L.FLOW_KEY) == set(L.SOURCE_SINK_LINKS)
     assert set(L.FLOW_KEY.values()) == set(flows.FLOWS)
-    assert len(set(L.FLOW_KEY.values())) == 12
+    assert len(set(L.FLOW_KEY.values())) == 15
     # The absent combinations are the design, not an omission.
     assert "battery_to_battery" not in flows.FLOWS
     assert "battery_to_export" not in flows.FLOWS
@@ -1230,7 +1417,7 @@ def test_flow_key_bridges_the_layout_to_flows_py():
         assert left in flows.SOURCES and right in flows.SINKS
         assert left == _SOURCE_NAME[source]
 
-    # Entity id and flows.py key agree on eleven of the twelve...
+    # Entity id and flows.py key agree on fourteen of the fifteen...
     def meter_slug(source, sink):
         return L.flow_meter(source, sink)[len("sensor.flow_"):-len("_daily")]
 
@@ -1433,7 +1620,8 @@ def test_export_is_solar_only_with_all_three_sources_live():
 def test_polarity_survives_the_card():
     """The same three unequal sources through the allocator, so the assertion
     is about drawn ribbons and not only about the reference decomposer."""
-    samples = [(3600.0, POLARITY_SOLAR, -POLARITY_BATTERY, POLARITY_GRID, 3000.0, 0.0)]
+    samples = [(3600.0, POLARITY_SOLAR, -POLARITY_BATTERY, POLARITY_GRID,
+                3000.0, 0.0, 0.0)]
     states, flows, counters = _states_for(samples)
     result = _alloc(states)
     assert counters[L.SOLAR] != counters[L.BAT_OUT] != counters[L.GRID_IN]

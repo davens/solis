@@ -1,6 +1,6 @@
 const S = id => (states[id] || {}).state;
-const OCTO = 'octopus_energy_00000000_0000_0000_0000_000000000000_';
-const g = id => { for (const d of ['sensor','number','time','select','binary_sensor']) { const s = states[d + '.' + id]; if (s && s.state !== 'unavailable' && s.state !== 'unknown') { return s; } } return null; };
+const IO = Object.keys(states).filter(k => k.includes('.octopus_energy_') && k.includes('_intelligent_'));
+const g = sfx => { for (const d of ['sensor','number','time','select','binary_sensor']) { for (const k of IO) { const s = states[k]; if (k.startsWith(d + '.octopus_energy_') && k.endsWith('_intelligent_' + sfx) && s && s.state !== 'unavailable' && s.state !== 'unknown') { return s; } } } return null; };
 const st = S('sensor.tesla_state') || 'unknown';
 const cs = S('sensor.tesla_charging_state');
 const kw = Number(S('sensor.tesla_charger_power'));
@@ -14,11 +14,11 @@ const stale = S('binary_sensor.teslamate_healthy') === 'off' || ['unknown','unav
 const soc = ok ? Math.max(0, Math.min(100, socN)) : 0;
 const km = Number(S('sensor.tesla_range'));
 const mi = isFinite(km) ? Math.round(km * 0.621371) : null;
-const limS = g(OCTO + 'intelligent_charge_target') || states['sensor.tesla_charge_limit'];
+const limS = g('charge_target') || states['sensor.tesla_charge_limit'];
 const lim = limS ? Number(limS.state) : NaN;
-const byS = g(OCTO + 'intelligent_target_time');
+const byS = g('target_time');
 const by = byS ? String(byS.state).slice(0, 5) : null;
-const disp = g(OCTO + 'intelligent_dispatching');
+const disp = g('dispatching');
 const da = (disp && disp.attributes) || {};
 const fmt = t => { const d = new Date(t); return isNaN(d) ? null : d.toTimeString().slice(0, 5); };
 const plans = Array.isArray(da.planned_dispatches) ? da.planned_dispatches : [];

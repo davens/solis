@@ -1,14 +1,24 @@
-"""Sankey v2 physics: instantaneous power -> twelve directed source->sink flows.
+"""Sankey v2 physics: instantaneous power -> fifteen directed source->sink flows.
 
-Supersedes ``decompose.py``. Five live readings go in:
+Supersedes ``decompose.py``. Six live readings go in:
 
     solar    W, DC, >= 0
     battery  W, DC, positive charging / negative discharging
     grid     W, AC, positive importing / negative exporting
-    house    W, AC, >= 0, INCLUDING the Tesla
+    house    W, AC, >= 0, INCLUDING both the Tesla and the air con
     tesla    W, AC, >= 0, the home-charging template sensor
+    aircon   W, AC, >= 0, derived from the LG hourly energy counter
 
-and twelve non-negative watt figures come out, one per link of the v2 graph.
+and fifteen non-negative watt figures come out, one per link of the graph.
+
+``aircon`` is the odd one. Every other channel is a real 10 s power reading;
+the LG ThinQ integration publishes no power entity at all, only an hourly
+energy counter, so the channel is a derivative of that counter and therefore
+holds one value for a whole hour, describing the hour that has just finished.
+Nothing in this module knows or cares -- it is watts like any other -- but a
+reader of the resulting ribbons should: the air-con split is hourly and lags
+by up to an hour, while every other ribbon is sampled at 10 s. See
+BRIEF_V2.md section 9.
 
 Why this module exists at all
 -----------------------------
@@ -21,7 +31,7 @@ changed while the energy did not.
 v2 fixes both with one move. The DC/AC gap is not modelled, it is **measured and
 named**: whatever arrives that does not leave is the Inverter node,
 
-    L = max(0, (S + B + G) - (Hr + T + C + E))
+    L = max(0, (S + B + G) - (Hr + T + A + C + E))
 
 so every sink fills exactly by construction and there is nothing left to fit.
 See ``NO_FITTED_CONSTANTS`` below -- the absence is load-bearing, not an
@@ -38,7 +48,7 @@ EXACTLY zero contributes exactly zero to every sink. A source reading anything
 above zero can be spent well beyond its own reading -- without bound in
 principle -- whenever the ``L >= 0`` clamp binds, because the sinks then demand
 more than the pool holds and filling each one exactly costs the sources the
-difference. ``decompose(0, 0, 100, 900, 0)`` credits the grid with 900 W against
+difference. ``decompose(0, 0, 100, 900, 0, 0)`` credits the grid with 900 W against
 a 100 W meter. Over four replayed days that overstatement is worth +0.02% to
 +0.42% of daily source energy, and it is the safe direction (the card clamps a
 ribbon to the node's own state), but it is real and it is not going to be
@@ -83,7 +93,7 @@ can reach one nor well-formed input the other.
 """
 import math
 
-# The twelve directed flows, in a fixed order. Keys are stable; tests and the
+# The fifteen directed flows, in a fixed order. Keys are stable; tests and the
 # helper/template plumbing key off these exact strings.
 #
 # The absent combinations are the design: no battery_to_export (the battery has
@@ -94,24 +104,27 @@ import math
 FLOWS = (
     "solar_to_house",
     "solar_to_tesla",
+    "solar_to_aircon",
     "solar_to_battery",
     "solar_to_export",
     "solar_to_inverter",
     "battery_to_house",
     "battery_to_tesla",
+    "battery_to_aircon",
     "battery_to_inverter",
     "grid_to_house",
     "grid_to_tesla",
+    "grid_to_aircon",
     "grid_to_battery",
     "grid_to_inverter",
 )
 
-# The five section-1 sinks each flow lands in, and the source of each flow.
-SINKS = ("house", "tesla", "battery", "export", "inverter")
+# The six section-1 sinks each flow lands in, and the source of each flow.
+SINKS = ("house", "tesla", "aircon", "battery", "export", "inverter")
 SOURCES = ("solar", "battery", "grid")
 
-# The five input channels, in decompose()'s argument order.
-CHANNELS = ("solar", "battery", "grid", "house", "tesla")
+# The six input channels, in decompose()'s argument order.
+CHANNELS = ("solar", "battery", "grid", "house", "tesla", "aircon")
 
 # Which input channels each reportable quantity can actually be moved by.
 #
@@ -123,33 +136,45 @@ CHANNELS = ("solar", "battery", "grid", "house", "tesla")
 # going into the car that same night, so a zero there is a fabrication.
 #
 # It is a map rather than a hardcoded pair of names because a hardcoded list
-# rots silently: add a thirteenth flow that reads a blind channel and the old
+# rots silently: add a sixteenth flow that reads a blind channel and the old
 # list happily reports a fabricated number for it. The map is verified COMPLETE
 # AND MINIMAL by test_dependency_map_is_complete_and_minimal, which perturbs
 # each channel and requires "moves" and "declared" to agree exactly. Minimality
 # matters as much as completeness: a map that declared every channel for every
 # quantity would be safe and useless, refusing all of 2026-08-27.
 #
-# The non-obvious entries, all consequences of Hr + T == house:
+# The non-obvious entries, all consequences of Hr + T + A == house:
 #   *_to_battery   ignores house AND tesla -- C depends on battery alone, and
 #                  the shares on solar/battery/grid alone.
-#   *_to_inverter  ignores tesla -- L reads Hr + T, never either part.
-#   solar_spent    ignores tesla -- to_house + to_tesla is house * share.
+#   *_to_inverter  ignores tesla AND aircon -- L reads Hr + T + A, which is
+#                  just `house`, never any one part of it.
+#   solar_spent    ignores tesla AND aircon -- to_house + to_tesla + to_aircon
+#                  is house * share, because Hr + T + A == house by construction.
 #   the six counter-facing quantities ALL ignore tesla, which is precisely what
 #   licenses keeping 2026-08-27's inverter reconciliation.
 _SBG = frozenset(("solar", "battery", "grid"))
 _SBGH = _SBG | {"house"}
 _ALL = _SBGH | {"tesla"}
+_ALLA = _ALL | {"aircon"}
 
+# Air con is carved out of the house load AFTER the Tesla, so T never moves when
+# the air-con reading does. That asymmetry is the whole reason _ALL survives
+# alongside _ALLA: the Tesla flows are genuinely blind to `aircon`, and declaring
+# otherwise would fail the minimality half of
+# test_dependency_map_is_complete_and_minimal. It is also what lets the four
+# replay fixtures -- captured before an air-con channel existed -- keep reporting
+# every Tesla, battery, export and inverter quantity they always did.
 DEPENDS_ON = {
     "solar_to_export": frozenset(("solar", "grid")),
     "solar_to_battery": _SBG, "grid_to_battery": _SBG,
     "solar_to_inverter": _SBGH, "battery_to_inverter": _SBGH,
     "grid_to_inverter": _SBGH,
-    "solar_to_house": _ALL, "battery_to_house": _ALL, "grid_to_house": _ALL,
+    "solar_to_house": _ALLA, "battery_to_house": _ALLA, "grid_to_house": _ALLA,
     "solar_to_tesla": _ALL, "battery_to_tesla": _ALL, "grid_to_tesla": _ALL,
+    "solar_to_aircon": _ALLA, "battery_to_aircon": _ALLA,
+    "grid_to_aircon": _ALLA,
     # node_totals() keys
-    "house": _ALL, "tesla": _ALL,
+    "house": _ALLA, "tesla": _ALL, "aircon": _ALLA,
     "battery_in": _SBG,
     "export": frozenset(("solar", "grid")),
     "inverter": _SBGH,
@@ -308,8 +333,8 @@ def _reading(name, value):
     return v
 
 
-def readings(solar, battery, grid, house, tesla):
-    """Five raw inputs -> the eight non-negative quantities the law works in.
+def readings(solar, battery, grid, house, tesla, aircon):
+    """Six raw inputs -> the ten non-negative quantities the law works in.
 
     Split out and public because every test of the clamps wants to see these
     directly, and because the Jinja templates that will ship to HA must be
@@ -328,9 +353,11 @@ def readings(solar, battery, grid, house, tesla):
     grid = _reading("grid", grid)
     house = _reading("house", house)
     tesla = _reading("tesla", tesla)
+    aircon = _reading("aircon", aircon)
 
     house = max(0.0, house)
     t = min(max(0.0, tesla), house)
+    a = min(max(0.0, aircon), house - t)
     return {
         "solar": max(0.0, solar),          # S
         "discharge": max(0.0, -battery),   # B, DC delivered
@@ -339,14 +366,15 @@ def readings(solar, battery, grid, house, tesla):
         "exp": max(0.0, -grid),            # E, AC exported
         "house": house,
         "tesla": t,                        # T, clamped to house
-        "house_rest": house - t,           # Hr, >= 0 by the clamp above
+        "aircon": a,                       # A, clamped to what T left
+        "house_rest": house - t - a,       # Hr, >= 0 by both clamps above
     }
 
 
 def inverter_loss(r):
     """The Inverter node: what came in and did not leave. Never negative.
 
-        L = max(0, (S + B + G) - (Hr + T + C + E))
+        L = max(0, (S + B + G) - (Hr + T + A + C + E))
 
     Clamped at zero because the alternative is a negative ribbon, and because a
     negative residual means the *sinks* out-read the sources on that sample --
@@ -357,7 +385,8 @@ def inverter_loss(r):
     the pool has shrunk.
     """
     supply = r["solar"] + r["discharge"] + r["imp"]
-    drawn = r["house_rest"] + r["tesla"] + r["charge"] + r["exp"]
+    drawn = (r["house_rest"] + r["tesla"] + r["aircon"]
+             + r["charge"] + r["exp"])
     return max(0.0, supply - drawn)
 
 
@@ -446,7 +475,8 @@ def _proportional(solar1, discharge, imp):
     instead of charged to the battery.
     """
     share = _normalise((solar1, discharge, imp))
-    return {"house_rest": share, "tesla": share, "charge": share, "loss": share}
+    return {"house_rest": share, "tesla": share, "aircon": share,
+            "charge": share, "loss": share}
 
 
 def _band_table(solar1, discharge, imp):
@@ -455,7 +485,7 @@ def _band_table(solar1, discharge, imp):
     Three different weightings, because the three kinds of sink sit in different
     places relative to the converter:
 
-    * AC sinks (house remainder, Tesla) are weighted by what each source can
+    * AC sinks (house remainder, Tesla, air con) are weighted by what each source can
       actually *deliver* as AC: ``eta(P) * P`` for the DC sources, and grid
       import unchanged because the smart meter already reads AC.
     * The DC sink (battery charge) is weighted by DC availability: solar goes
@@ -504,6 +534,7 @@ def _band_table(solar1, discharge, imp):
     return {
         "house_rest": ac_share,
         "tesla": ac_share,
+        "aircon": ac_share,
         "charge": _fallback(_normalise(dc), plain),
         "loss": loss_share,
     }
@@ -560,17 +591,18 @@ def check_structure(out, r):
         raise StructureError("grid reads importing and exporting at once")
     if r["charge"] > 0.0 and (
             out["battery_to_house"] or out["battery_to_tesla"]
-            or out["battery_to_inverter"]):
+            or out["battery_to_aircon"] or out["battery_to_inverter"]):
         raise StructureError("a charging battery cannot also be a source")
 
 
-def decompose(solar, battery, grid, house, tesla):
-    """Instantaneous W -> {flow: W}. Twelve keys, every value >= 0.
+def decompose(solar, battery, grid, house, tesla, aircon):
+    """Instantaneous W -> {flow: W}. Fifteen keys, every value >= 0.
 
-    ``house`` is the full house load *including* the Tesla; ``tesla`` is split
-    back out here. Both are AC. ``solar`` and ``battery`` are DC.
+    ``house`` is the full house load *including* both the Tesla and the air
+    con; each is split back out here, the Tesla first. All three are AC.
+    ``solar`` and ``battery`` are DC.
     """
-    r = readings(solar, battery, grid, house, tesla)
+    r = readings(solar, battery, grid, house, tesla, aircon)
 
     # Step 1: export is structurally solar-only, and capped by the solar
     # reading. Uncapped, a sample where export momentarily out-reads solar would
@@ -587,13 +619,14 @@ def decompose(solar, battery, grid, house, tesla):
     sinks = {
         "house_rest": r["house_rest"],
         "tesla": r["tesla"],
+        "aircon": r["aircon"],
         "charge": r["charge"],
         "loss": inverter_loss(r),
     }
     shares = LOSS_RULES[LOSS_RULE](solar1, r["discharge"], r["imp"])
 
-    key = {"house_rest": "house", "tesla": "tesla", "charge": "battery",
-           "loss": "inverter"}
+    key = {"house_rest": "house", "tesla": "tesla", "aircon": "aircon",
+           "charge": "battery", "loss": "inverter"}
     out = {"solar_to_export": s2e}
     for sink, amount in sinks.items():
         ws, wb, wg = shares[sink]
@@ -611,7 +644,7 @@ def decompose(solar, battery, grid, house, tesla):
 def node_totals(flows):
     """Flows -> the state each v2 node should show, in the same units.
 
-    The five section-1 nodes are defined as the sum of their inbound flows --
+    The six section-1 nodes are defined as the sum of their inbound flows --
     that is the v2 node-identity decision, and it is what makes House exclude
     the Tesla without a subtract_entities trick. The three sources are summed
     too, but only for comparison against the inverter's own counters: those
@@ -621,6 +654,7 @@ def node_totals(flows):
     return {
         "house": sum(flows[s + "_to_house"] for s in SOURCES),
         "tesla": sum(flows[s + "_to_tesla"] for s in SOURCES),
+        "aircon": sum(flows[s + "_to_aircon"] for s in SOURCES),
         "battery_in": flows["solar_to_battery"] + flows["grid_to_battery"],
         "export": flows["solar_to_export"],
         "inverter": sum(flows[s + "_to_inverter"] for s in SOURCES),

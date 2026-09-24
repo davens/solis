@@ -1,4 +1,6 @@
 .DS_Store
+.env
+CLAUDE.local.md
 __pycache__/
 *.pyc
 .solar_cache.json
@@ -12,3 +14,8 @@ __pycache__/
 
 # dashboard dumps written by car_tile/apply_tile.py (kept local, like the other dashboard backups)
 car_tile/backups/
+/overview_pre_*.json
+/*_backup.json
+# headless-Chrome screenshots and profiles from car_tile/hashot.js can show a live location
+car_tile/*.png
+car_tile/chrome-prof-*/
