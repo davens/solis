@@ -1,9 +1,10 @@
 // Screenshot an HA dashboard path in headless Chrome, authenticated with the long-lived token held
 // in memory only: off-the-record browser context, token injected before the app boots, profile deleted.
 // usage: node hashot.js <path> <width> <height> <waitSec> <out.png>
-// HA_URL (default http://homeassistant.local:8123) and HA_TOKEN come from the environment; without HA_TOKEN the
-// token is read from the home-assistant MCP entry for this repo in ~/.claude.json.
+// HA_URL (default http://homeassistant.local:8123) and HA_TOKEN come from the environment or the repo's .env;
+// without HA_TOKEN the token is read from the home-assistant MCP entry for this repo in ~/.claude.json.
 const fs = require('fs'), os = require('os'), path = require('path'), { spawn } = require('child_process');
+try { process.loadEnvFile(path.join(__dirname, '..', '.env')); } catch (e) { if (e.code !== 'ENOENT') { throw e; } }
 const [p, W, H, waitS, out] = process.argv.slice(2);
 const HA = (process.env.HA_URL || 'http://homeassistant.local:8123').replace(/\/+$/, '');
 const tok = process.env.HA_TOKEN || JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8'))

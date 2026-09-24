@@ -1,10 +1,12 @@
 """Swap the Overview Car tile's `w` template (and optional card-level keys) in the live dashboard.
 Backs the whole dashboard up to backups/ first.
 usage: uv run --with websockets python apply_tile.py options/<id>/template.js card_extra.json [--dry]
-HA_URL (default http://homeassistant.local:8123) and HA_TOKEN come from the environment; without HA_TOKEN the
-token is read from the home-assistant MCP entry for this repo in ~/.claude.json. It is held in memory only."""
+HA_URL (default http://homeassistant.local:8123) and HA_TOKEN come from the environment or the repo's .env; without
+HA_TOKEN the token is read from the home-assistant MCP entry for this repo in ~/.claude.json. It is held in memory only."""
 import asyncio, json, os, sys, time, websockets
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import site_env  # noqa: F401,E402 - loads the repo's .env into os.environ
 HA = os.environ.get('HA_URL', 'http://homeassistant.local:8123').rstrip('/')
 WS = HA.replace('https://', 'wss://', 1).replace('http://', 'ws://', 1) + '/api/websocket'
 def ha_token():

@@ -1,6 +1,6 @@
 const S = id => (states[id] || {}).state;
-const IO = Object.keys(states).filter(k => k.includes('.octopus_energy_') && k.includes('_intelligent_'));
-const g = sfx => { for (const d of ['sensor','number','time','select','binary_sensor']) { for (const k of IO) { const s = states[k]; if (k.startsWith(d + '.octopus_energy_') && k.endsWith('_intelligent_' + sfx) && s && s.state !== 'unavailable' && s.state !== 'unknown') { return s; } } } return null; };
+const OD = Object.keys(states).filter(k => k.includes('.octopus_energy_') && k.includes('_intelligent_')).map(k => k.slice(k.indexOf('.') + 1, k.indexOf('_intelligent_'))).sort()[0];
+const g = sfx => { for (const d of ['sensor','number','time','select','binary_sensor']) { const s = states[d + '.' + OD + '_intelligent_' + sfx]; if (s && s.state !== 'unavailable' && s.state !== 'unknown') { return s; } } return null; };
 const st = S('sensor.tesla_state') || 'unknown';
 const cs = S('sensor.tesla_charging_state');
 const kw = Number(S('sensor.tesla_charger_power'));
