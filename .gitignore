@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 .solar_cache.json
 .claude/settings.local.json
+
+# dashboard dumps written by car_tile/apply_tile.py (kept local, like the other dashboard backups)
+car_tile/backups/

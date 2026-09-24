@@ -1,0 +1,40 @@
+{
+ "styles": {
+  "card": [
+   {
+    "background": "#161616"
+   },
+   {
+    "border": "1px solid rgba(255,255,255,0.06)"
+   },
+   {
+    "padding": "14px 16px 13px"
+   },
+   {
+    "height": "auto"
+   }
+  ],
+  "grid": [
+   {
+    "grid-template-areas": "'w'"
+   },
+   {
+    "grid-template-columns": "1fr"
+   }
+  ],
+  "custom_fields": {
+   "w": [
+    {
+     "width": "100%"
+    },
+    {
+     "overflow": "visible"
+    }
+   ]
+  }
+ },
+ "hold_action": {
+  "action": "more-info",
+  "entity": "device_tracker.tesla_location"
+ }
+}

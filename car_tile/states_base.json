@@ -1,0 +1,874 @@
+[
+ {
+  "entity_id": "update.teslamate_update",
+  "state": "off",
+  "attributes": {
+   "auto_update": false,
+   "display_precision": 0,
+   "installed_version": "2.7.0",
+   "in_progress": false,
+   "latest_version": "2.7.0",
+   "release_summary": null,
+   "release_url": null,
+   "skipped_version": null,
+   "title": "TeslaMate",
+   "update_percentage": null,
+   "entity_picture": "/api/hassio/addons/6be3d3da_teslamate/icon",
+   "friendly_name": "TeslaMate Update",
+   "supported_features": 29
+  },
+  "last_changed": "2026-09-21T01:13:19.202488+00:00",
+  "last_reported": "2026-09-21T01:13:19.202488+00:00",
+  "last_updated": "2026-09-21T01:13:19.202488+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_home_charging_energy",
+  "state": "244.458",
+  "attributes": {
+   "state_class": "total",
+   "source": "sensor.tesla_home_charging_power",
+   "unit_of_measurement": "kWh",
+   "device_class": "energy",
+   "friendly_name": "Tesla home charging energy"
+  },
+  "last_changed": "2026-09-22T15:42:52.386579+00:00",
+  "last_reported": "2026-09-22T15:43:52.389838+00:00",
+  "last_updated": "2026-09-22T15:42:52.386579+00:00"
+ },
+ {
+  "entity_id": "sensor.flow_solar_to_tesla_energy",
+  "state": "0.051",
+  "attributes": {
+   "state_class": "total",
+   "source": "sensor.flow_solar_to_tesla_power",
+   "unit_of_measurement": "kWh",
+   "device_class": "energy",
+   "friendly_name": "Flow solar to tesla energy"
+  },
+  "last_changed": "2026-09-22T15:42:52.415817+00:00",
+  "last_reported": "2026-09-22T15:43:52.418028+00:00",
+  "last_updated": "2026-09-22T15:42:52.415817+00:00"
+ },
+ {
+  "entity_id": "sensor.flow_battery_to_tesla_energy",
+  "state": "3.057",
+  "attributes": {
+   "state_class": "total",
+   "source": "sensor.flow_battery_to_tesla_power",
+   "unit_of_measurement": "kWh",
+   "device_class": "energy",
+   "friendly_name": "Flow battery to tesla energy"
+  },
+  "last_changed": "2026-09-22T15:42:52.416704+00:00",
+  "last_reported": "2026-09-22T15:43:52.418707+00:00",
+  "last_updated": "2026-09-22T15:42:52.416704+00:00"
+ },
+ {
+  "entity_id": "sensor.flow_grid_to_tesla_energy",
+  "state": "212.587",
+  "attributes": {
+   "state_class": "total",
+   "source": "sensor.flow_grid_to_tesla_power",
+   "unit_of_measurement": "kWh",
+   "device_class": "energy",
+   "friendly_name": "Flow grid to tesla energy"
+  },
+  "last_changed": "2026-09-22T15:42:52.417510+00:00",
+  "last_reported": "2026-09-22T15:43:52.419581+00:00",
+  "last_updated": "2026-09-22T15:42:52.417510+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_home_charging_power",
+  "state": "0",
+  "attributes": {
+   "state_class": "measurement",
+   "unit_of_measurement": "W",
+   "device_class": "power",
+   "friendly_name": "Tesla home charging power"
+  },
+  "last_changed": "2026-09-22T15:42:52.385654+00:00",
+  "last_reported": "2026-09-22T15:42:52.385654+00:00",
+  "last_updated": "2026-09-22T15:42:52.385654+00:00"
+ },
+ {
+  "entity_id": "sensor.flow_solar_to_tesla_power",
+  "state": "0.0",
+  "attributes": {
+   "state_class": "measurement",
+   "unit_of_measurement": "W",
+   "device_class": "power",
+   "friendly_name": "Flow solar to tesla power"
+  },
+  "last_changed": "2026-09-22T15:42:52.396247+00:00",
+  "last_reported": "2026-09-22T15:42:52.396247+00:00",
+  "last_updated": "2026-09-22T15:42:52.396247+00:00"
+ },
+ {
+  "entity_id": "sensor.flow_battery_to_tesla_power",
+  "state": "0.0",
+  "attributes": {
+   "state_class": "measurement",
+   "unit_of_measurement": "W",
+   "device_class": "power",
+   "friendly_name": "Flow battery to tesla power"
+  },
+  "last_changed": "2026-09-22T15:42:52.401383+00:00",
+  "last_reported": "2026-09-22T15:42:52.401383+00:00",
+  "last_updated": "2026-09-22T15:42:52.401383+00:00"
+ },
+ {
+  "entity_id": "sensor.flow_grid_to_tesla_power",
+  "state": "0.0",
+  "attributes": {
+   "state_class": "measurement",
+   "unit_of_measurement": "W",
+   "device_class": "power",
+   "friendly_name": "Flow grid to tesla power"
+  },
+  "last_changed": "2026-09-22T15:42:52.406076+00:00",
+  "last_reported": "2026-09-22T15:42:52.406076+00:00",
+  "last_updated": "2026-09-22T15:42:52.406076+00:00"
+ },
+ {
+  "entity_id": "sensor.flow_solar_to_tesla_daily",
+  "state": "0",
+  "attributes": {
+   "state_class": "total_increasing",
+   "status": "collecting",
+   "last_period": "0.009",
+   "last_valid_state": "0.051",
+   "last_reset": "2026-09-22T23:00:00.019953+00:00",
+   "next_reset": "2026-09-24T00:00:00+01:00",
+   "unit_of_measurement": "kWh",
+   "device_class": "energy",
+   "friendly_name": "Flow solar to tesla daily"
+  },
+  "last_changed": "2026-09-22T23:00:00.020190+00:00",
+  "last_reported": "2026-09-22T23:00:00.021001+00:00",
+  "last_updated": "2026-09-22T23:00:00.021001+00:00"
+ },
+ {
+  "entity_id": "sensor.flow_battery_to_tesla_daily",
+  "state": "0",
+  "attributes": {
+   "state_class": "total_increasing",
+   "status": "collecting",
+   "last_period": "0.007",
+   "last_valid_state": "3.057",
+   "last_reset": "2026-09-22T23:00:00.022463+00:00",
+   "next_reset": "2026-09-24T00:00:00+01:00",
+   "unit_of_measurement": "kWh",
+   "device_class": "energy",
+   "friendly_name": "Flow battery to tesla daily"
+  },
+  "last_changed": "2026-09-22T23:00:00.022635+00:00",
+  "last_reported": "2026-09-22T23:00:00.023340+00:00",
+  "last_updated": "2026-09-22T23:00:00.023340+00:00"
+ },
+ {
+  "entity_id": "sensor.flow_grid_to_tesla_daily",
+  "state": "0",
+  "attributes": {
+   "state_class": "total_increasing",
+   "status": "collecting",
+   "last_period": "0.004",
+   "last_valid_state": "212.587",
+   "last_reset": "2026-09-22T23:00:00.040784+00:00",
+   "next_reset": "2026-09-24T00:00:00+01:00",
+   "unit_of_measurement": "kWh",
+   "device_class": "energy",
+   "friendly_name": "Flow grid to tesla daily"
+  },
+  "last_changed": "2026-09-22T23:00:00.040974+00:00",
+  "last_reported": "2026-09-22T23:00:00.041703+00:00",
+  "last_updated": "2026-09-22T23:00:00.041703+00:00"
+ },
+ {
+  "entity_id": "binary_sensor.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_dispatching",
+  "state": "off",
+  "attributes": {
+   "planned_dispatches": [],
+   "completed_dispatches": [
+    {
+     "start": "2026-09-21T05:00:00+01:00",
+     "end": "2026-09-21T05:30:00+01:00",
+     "charge_in_kwh": -0.62,
+     "source": "unknown",
+     "location": "AWAY"
+    },
+    {
+     "start": "2026-09-22T16:30:00+01:00",
+     "end": "2026-09-22T17:00:00+01:00",
+     "charge_in_kwh": -0.0,
+     "source": "unknown",
+     "location": "AWAY"
+    }
+   ],
+   "started_dispatches": [
+    {
+     "start": "2026-09-21T05:00:00+01:00",
+     "end": "2026-09-21T05:30:00+01:00"
+    }
+   ],
+   "provider": "TESLA",
+   "vehicle_battery_size_in_kwh": null,
+   "charge_point_power_in_kw": null,
+   "current_start": null,
+   "current_end": null,
+   "next_start": null,
+   "next_end": null,
+   "manually_refresh_dispatches": false,
+   "minimum_dispatch_duration_in_minutes": 0,
+   "icon": "mdi:power-plug-battery",
+   "friendly_name": "Tesla Model 3 (Electric Vehicle) Intelligent Dispatching (00000000-0000-0000-0000-000000000000)"
+  },
+  "last_changed": "2026-09-21T04:30:45.238627+00:00",
+  "last_reported": "2026-09-23T00:13:42.237079+00:00",
+  "last_updated": "2026-09-23T00:02:42.832637+00:00"
+ },
+ {
+  "entity_id": "number.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_charge_target",
+  "state": "75.0",
+  "attributes": {
+   "min": 5,
+   "max": 100,
+   "step": 1,
+   "mode": "box",
+   "unit_of_measurement": "%",
+   "device_class": "battery",
+   "icon": "mdi:battery-charging",
+   "friendly_name": "Tesla Model 3 (Electric Vehicle) Intelligent Charge Target (00000000-0000-0000-0000-000000000000)"
+  },
+  "last_changed": "2026-09-21T01:13:42.884707+00:00",
+  "last_reported": "2026-09-21T01:13:42.884707+00:00",
+  "last_updated": "2026-09-21T01:13:42.884707+00:00"
+ },
+ {
+  "entity_id": "switch.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_smart_charge",
+  "state": "on",
+  "attributes": {
+   "icon": "mdi:ev-station",
+   "friendly_name": "Tesla Model 3 (Electric Vehicle) Intelligent Smart Charge (00000000-0000-0000-0000-000000000000)"
+  },
+  "last_changed": "2026-09-21T01:13:42.889230+00:00",
+  "last_reported": "2026-09-21T01:13:42.889230+00:00",
+  "last_updated": "2026-09-21T01:13:42.889230+00:00"
+ },
+ {
+  "entity_id": "switch.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_bump_charge",
+  "state": "off",
+  "attributes": {
+   "icon": "mdi:ev-plug-type2",
+   "friendly_name": "Tesla Model 3 (Electric Vehicle) Intelligent Bump Charge (00000000-0000-0000-0000-000000000000)"
+  },
+  "last_changed": "2026-09-21T01:14:42.725461+00:00",
+  "last_reported": "2026-09-21T01:28:42.236743+00:00",
+  "last_updated": "2026-09-21T01:14:42.725461+00:00"
+ },
+ {
+  "entity_id": "select.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_target_time",
+  "state": "05:30",
+  "attributes": {
+   "options": [
+    "00:00",
+    "00:30",
+    "01:00",
+    "01:30",
+    "02:00",
+    "02:30",
+    "03:00",
+    "03:30",
+    "04:00",
+    "04:30",
+    "05:00",
+    "05:30",
+    "06:00",
+    "06:30",
+    "07:00",
+    "07:30",
+    "08:00",
+    "08:30",
+    "09:00",
+    "09:30",
+    "10:00",
+    "10:30",
+    "11:00",
+    "11:30",
+    "12:00",
+    "12:30",
+    "13:00",
+    "13:30",
+    "14:00",
+    "14:30",
+    "15:00",
+    "15:30",
+    "16:00",
+    "16:30",
+    "17:00",
+    "17:30",
+    "18:00",
+    "18:30",
+    "19:00",
+    "19:30",
+    "20:00",
+    "20:30",
+    "21:00",
+    "21:30",
+    "22:00",
+    "22:30",
+    "23:00",
+    "23:30"
+   ],
+   "raw_time": "05:30:00",
+   "icon": "mdi:battery-clock",
+   "friendly_name": "Tesla Model 3 (Electric Vehicle) Intelligent Target Time (00000000-0000-0000-0000-000000000000)"
+  },
+  "last_changed": "2026-09-21T01:13:42.950918+00:00",
+  "last_reported": "2026-09-21T01:28:42.076427+00:00",
+  "last_updated": "2026-09-21T01:14:42.563374+00:00"
+ },
+ {
+  "entity_id": "sensor.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_state",
+  "state": "SMART_CONTROL_NOT_AVAILABLE",
+  "attributes": {
+   "icon": "mdi:power-plug-battery",
+   "friendly_name": "Tesla Model 3 (Electric Vehicle) Intelligent State (00000000-0000-0000-0000-000000000000)"
+  },
+  "last_changed": "2026-09-22T18:43:35.889429+00:00",
+  "last_reported": "2026-09-22T18:43:35.889429+00:00",
+  "last_updated": "2026-09-22T18:43:35.889429+00:00"
+ },
+ {
+  "entity_id": "sensor.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_charge_cap_hours",
+  "state": "0",
+  "attributes": {
+   "state_class": "total_increasing",
+   "icon": "mdi:power-plug-battery",
+   "friendly_name": "Tesla Model 3 (Electric Vehicle) Charge Cap Hours (00000000-0000-0000-0000-000000000000)"
+  },
+  "last_changed": "2026-09-23T11:00:51.237786+00:00",
+  "last_reported": "2026-09-23T11:13:51.237911+00:00",
+  "last_updated": "2026-09-23T11:00:51.237786+00:00"
+ },
+ {
+  "entity_id": "sensor.octopus_energy_00000000_0000_0000_0000_000000000000_intelligent_state_of_charge",
+  "state": "57.4",
+  "attributes": {
+   "last_reported": "2026-09-23T17:29:10+01:00",
+   "unit_of_measurement": "%",
+   "device_class": "battery",
+   "icon": "mdi:battery",
+   "friendly_name": "Tesla Model 3 (Electric Vehicle) State of Charge (00000000-0000-0000-0000-000000000000)"
+  },
+  "last_changed": "2026-09-23T15:52:06.570558+00:00",
+  "last_reported": "2026-09-23T16:44:06.515389+00:00",
+  "last_updated": "2026-09-23T16:32:06.754990+00:00"
+ },
+ {
+  "entity_id": "binary_sensor.tesla_sentry",
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Tesla Sentry"
+  },
+  "last_changed": "2026-09-23T15:34:25.893361+00:00",
+  "last_reported": "2026-09-23T15:34:25.893361+00:00",
+  "last_updated": "2026-09-23T15:34:25.893361+00:00"
+ },
+ {
+  "entity_id": "binary_sensor.tesla_windows_open",
+  "state": "off",
+  "attributes": {
+   "device_class": "window",
+   "friendly_name": "Tesla Windows"
+  },
+  "last_changed": "2026-09-21T01:14:22.731927+00:00",
+  "last_reported": "2026-09-21T01:14:22.731927+00:00",
+  "last_updated": "2026-09-21T01:14:22.731927+00:00"
+ },
+ {
+  "entity_id": "binary_sensor.tesla_doors_open",
+  "state": "off",
+  "attributes": {
+   "device_class": "door",
+   "friendly_name": "Tesla Doors"
+  },
+  "last_changed": "2026-09-23T15:42:21.538813+00:00",
+  "last_reported": "2026-09-23T15:42:21.538813+00:00",
+  "last_updated": "2026-09-23T15:42:21.538813+00:00"
+ },
+ {
+  "entity_id": "binary_sensor.tesla_trunk_open",
+  "state": "off",
+  "attributes": {
+   "device_class": "opening",
+   "friendly_name": "Tesla Boot"
+  },
+  "last_changed": "2026-09-21T01:14:22.736703+00:00",
+  "last_reported": "2026-09-21T01:14:22.736703+00:00",
+  "last_updated": "2026-09-21T01:14:22.736703+00:00"
+ },
+ {
+  "entity_id": "binary_sensor.tesla_frunk_open",
+  "state": "off",
+  "attributes": {
+   "device_class": "opening",
+   "friendly_name": "Tesla Frunk"
+  },
+  "last_changed": "2026-09-21T01:14:22.742007+00:00",
+  "last_reported": "2026-09-21T01:14:22.742007+00:00",
+  "last_updated": "2026-09-21T01:14:22.742007+00:00"
+ },
+ {
+  "entity_id": "binary_sensor.tesla_user_present",
+  "state": "off",
+  "attributes": {
+   "device_class": "occupancy",
+   "friendly_name": "Tesla User present"
+  },
+  "last_changed": "2026-09-23T15:42:21.536402+00:00",
+  "last_reported": "2026-09-23T15:42:21.536402+00:00",
+  "last_updated": "2026-09-23T15:42:21.536402+00:00"
+ },
+ {
+  "entity_id": "binary_sensor.tesla_climate_on",
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Tesla Climate on"
+  },
+  "last_changed": "2026-09-23T15:42:21.540694+00:00",
+  "last_reported": "2026-09-23T15:42:21.540694+00:00",
+  "last_updated": "2026-09-23T15:42:21.540694+00:00"
+ },
+ {
+  "entity_id": "binary_sensor.tesla_preconditioning",
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Tesla Preconditioning"
+  },
+  "last_changed": "2026-09-23T06:55:58.179258+00:00",
+  "last_reported": "2026-09-23T06:55:58.179258+00:00",
+  "last_updated": "2026-09-23T06:55:58.179258+00:00"
+ },
+ {
+  "entity_id": "binary_sensor.tesla_locked",
+  "state": "on",
+  "attributes": {
+   "device_class": "lock",
+   "friendly_name": "Tesla Locked"
+  },
+  "last_changed": "2026-09-23T15:42:51.879014+00:00",
+  "last_reported": "2026-09-23T15:42:51.879014+00:00",
+  "last_updated": "2026-09-23T15:42:51.879014+00:00"
+ },
+ {
+  "entity_id": "binary_sensor.tesla_update_available",
+  "state": "off",
+  "attributes": {
+   "device_class": "update",
+   "friendly_name": "Tesla Update available"
+  },
+  "last_changed": "2026-09-21T01:14:22.776625+00:00",
+  "last_reported": "2026-09-21T01:14:22.776625+00:00",
+  "last_updated": "2026-09-21T01:14:22.776625+00:00"
+ },
+ {
+  "entity_id": "binary_sensor.tesla_plugged_in",
+  "state": "on",
+  "attributes": {
+   "device_class": "plug",
+   "friendly_name": "Tesla Plugged in"
+  },
+  "last_changed": "2026-09-23T15:43:52.751393+00:00",
+  "last_reported": "2026-09-23T15:43:52.751393+00:00",
+  "last_updated": "2026-09-23T15:43:52.751393+00:00"
+ },
+ {
+  "entity_id": "binary_sensor.tesla_charge_port",
+  "state": "on",
+  "attributes": {
+   "device_class": "opening",
+   "friendly_name": "Tesla Charge port"
+  },
+  "last_changed": "2026-09-23T15:43:52.746645+00:00",
+  "last_reported": "2026-09-23T15:43:52.746645+00:00",
+  "last_updated": "2026-09-23T15:43:52.746645+00:00"
+ },
+ {
+  "entity_id": "binary_sensor.teslamate_healthy",
+  "state": "on",
+  "attributes": {
+   "device_class": "connectivity",
+   "friendly_name": "Tesla TeslaMate healthy"
+  },
+  "last_changed": "2026-09-23T14:54:18.762874+00:00",
+  "last_reported": "2026-09-23T14:54:18.762874+00:00",
+  "last_updated": "2026-09-23T14:54:18.762874+00:00"
+ },
+ {
+  "entity_id": "binary_sensor.tesla_tpms_warn_fl",
+  "state": "off",
+  "attributes": {
+   "device_class": "problem",
+   "friendly_name": "Tesla Tyre warn FL"
+  },
+  "last_changed": "2026-09-21T01:14:22.792211+00:00",
+  "last_reported": "2026-09-21T01:14:22.792211+00:00",
+  "last_updated": "2026-09-21T01:14:22.792211+00:00"
+ },
+ {
+  "entity_id": "binary_sensor.tesla_tpms_warn_fr",
+  "state": "off",
+  "attributes": {
+   "device_class": "problem",
+   "friendly_name": "Tesla Tyre warn FR"
+  },
+  "last_changed": "2026-09-21T01:14:22.797355+00:00",
+  "last_reported": "2026-09-21T01:14:22.797355+00:00",
+  "last_updated": "2026-09-21T01:14:22.797355+00:00"
+ },
+ {
+  "entity_id": "binary_sensor.tesla_tpms_warn_rl",
+  "state": "off",
+  "attributes": {
+   "device_class": "problem",
+   "friendly_name": "Tesla Tyre warn RL"
+  },
+  "last_changed": "2026-09-21T01:14:22.851779+00:00",
+  "last_reported": "2026-09-21T01:14:22.851779+00:00",
+  "last_updated": "2026-09-21T01:14:22.851779+00:00"
+ },
+ {
+  "entity_id": "binary_sensor.tesla_tpms_warn_rr",
+  "state": "off",
+  "attributes": {
+   "device_class": "problem",
+   "friendly_name": "Tesla Tyre warn RR"
+  },
+  "last_changed": "2026-09-21T01:14:22.860988+00:00",
+  "last_reported": "2026-09-21T01:14:22.860988+00:00",
+  "last_updated": "2026-09-21T01:14:22.860988+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_charging_state",
+  "state": "NoPower",
+  "attributes": {
+   "icon": "mdi:battery-charging",
+   "friendly_name": "Tesla Charging state"
+  },
+  "last_changed": "2026-09-23T15:43:52.738636+00:00",
+  "last_reported": "2026-09-23T15:43:52.738636+00:00",
+  "last_updated": "2026-09-23T15:43:52.738636+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_geofence",
+  "state": "unknown",
+  "attributes": {
+   "icon": "mdi:map-marker",
+   "friendly_name": "Tesla Geofence"
+  },
+  "last_changed": "2026-09-21T01:14:21.722953+00:00",
+  "last_reported": "2026-09-21T01:14:21.722953+00:00",
+  "last_updated": "2026-09-21T01:14:21.722953+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_speed",
+  "state": "0",
+  "attributes": {
+   "unit_of_measurement": "km/h",
+   "device_class": "speed",
+   "friendly_name": "Tesla Speed"
+  },
+  "last_changed": "2026-09-23T15:40:03.251700+00:00",
+  "last_reported": "2026-09-23T15:40:03.251700+00:00",
+  "last_updated": "2026-09-23T15:40:03.251700+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_inside_temp",
+  "state": "27.8",
+  "attributes": {
+   "unit_of_measurement": "\u00b0C",
+   "device_class": "temperature",
+   "friendly_name": "Tesla Inside temp"
+  },
+  "last_changed": "2026-09-23T16:25:04.409594+00:00",
+  "last_reported": "2026-09-23T16:25:04.409594+00:00",
+  "last_updated": "2026-09-23T16:25:04.409594+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_outside_temp",
+  "state": "26.0",
+  "attributes": {
+   "unit_of_measurement": "\u00b0C",
+   "device_class": "temperature",
+   "friendly_name": "Tesla Outside temp"
+  },
+  "last_changed": "2026-09-23T16:25:04.414886+00:00",
+  "last_reported": "2026-09-23T16:25:04.414886+00:00",
+  "last_updated": "2026-09-23T16:25:04.414886+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_charger_actual_current",
+  "state": "0",
+  "attributes": {
+   "unit_of_measurement": "A",
+   "device_class": "current",
+   "friendly_name": "Tesla Charger current"
+  },
+  "last_changed": "2026-09-22T15:42:52.473967+00:00",
+  "last_reported": "2026-09-22T15:42:52.473967+00:00",
+  "last_updated": "2026-09-22T15:42:52.473967+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_charger_voltage",
+  "state": "2",
+  "attributes": {
+   "unit_of_measurement": "V",
+   "device_class": "voltage",
+   "friendly_name": "Tesla Charger voltage"
+  },
+  "last_changed": "2026-09-22T15:43:53.109876+00:00",
+  "last_reported": "2026-09-22T15:43:53.109876+00:00",
+  "last_updated": "2026-09-22T15:43:53.109876+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_tpms_fl",
+  "state": "2.725",
+  "attributes": {
+   "unit_of_measurement": "bar",
+   "device_class": "pressure",
+   "friendly_name": "Tesla Tyre FL"
+  },
+  "last_changed": "2026-09-23T15:38:16.712800+00:00",
+  "last_reported": "2026-09-23T15:38:16.712800+00:00",
+  "last_updated": "2026-09-23T15:38:16.712800+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_tpms_fr",
+  "state": "2.75",
+  "attributes": {
+   "unit_of_measurement": "bar",
+   "device_class": "pressure",
+   "friendly_name": "Tesla Tyre FR"
+  },
+  "last_changed": "2026-09-23T14:44:29.568001+00:00",
+  "last_reported": "2026-09-23T14:44:29.568001+00:00",
+  "last_updated": "2026-09-23T14:44:29.568001+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_tpms_rl",
+  "state": "2.575",
+  "attributes": {
+   "unit_of_measurement": "bar",
+   "device_class": "pressure",
+   "friendly_name": "Tesla Tyre RL"
+  },
+  "last_changed": "2026-09-23T14:44:29.560637+00:00",
+  "last_reported": "2026-09-23T14:44:29.560637+00:00",
+  "last_updated": "2026-09-23T14:44:29.560637+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_tpms_rr",
+  "state": "2.625",
+  "attributes": {
+   "unit_of_measurement": "bar",
+   "device_class": "pressure",
+   "friendly_name": "Tesla Tyre RR"
+  },
+  "last_changed": "2026-09-23T15:36:44.312179+00:00",
+  "last_reported": "2026-09-23T15:36:44.312179+00:00",
+  "last_updated": "2026-09-23T15:36:44.312179+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_battery",
+  "state": "57",
+  "attributes": {
+   "unit_of_measurement": "%",
+   "device_class": "battery",
+   "friendly_name": "Tesla Battery"
+  },
+  "last_changed": "2026-09-23T15:41:04.460677+00:00",
+  "last_reported": "2026-09-23T15:41:04.460677+00:00",
+  "last_updated": "2026-09-23T15:41:04.460677+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_state",
+  "state": "offline",
+  "attributes": {
+   "icon": "mdi:car-connected",
+   "friendly_name": "Tesla State"
+  },
+  "last_changed": "2026-09-23T16:37:04.377417+00:00",
+  "last_reported": "2026-09-23T16:37:04.377417+00:00",
+  "last_updated": "2026-09-23T16:37:04.377417+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_charger_power",
+  "state": "0",
+  "attributes": {
+   "unit_of_measurement": "kW",
+   "device_class": "power",
+   "friendly_name": "Tesla Charger power"
+  },
+  "last_changed": "2026-09-22T15:42:52.438260+00:00",
+  "last_reported": "2026-09-22T15:42:52.438260+00:00",
+  "last_updated": "2026-09-22T15:42:52.438260+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_charge_limit",
+  "state": "75",
+  "attributes": {
+   "unit_of_measurement": "%",
+   "icon": "mdi:battery-charging-90",
+   "friendly_name": "Tesla Charge limit"
+  },
+  "last_changed": "2026-09-21T01:14:22.925686+00:00",
+  "last_reported": "2026-09-21T01:14:22.925686+00:00",
+  "last_updated": "2026-09-21T01:14:22.925686+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_time_to_full_charge",
+  "state": "0.0",
+  "attributes": {
+   "unit_of_measurement": "h",
+   "icon": "mdi:clock-outline",
+   "friendly_name": "Tesla Time to full charge"
+  },
+  "last_changed": "2026-09-22T15:43:22.722106+00:00",
+  "last_reported": "2026-09-22T15:43:22.722106+00:00",
+  "last_updated": "2026-09-22T15:43:22.722106+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_range",
+  "state": "242.0",
+  "attributes": {
+   "unit_of_measurement": "km",
+   "device_class": "distance",
+   "friendly_name": "Tesla Range"
+  },
+  "last_changed": "2026-09-23T16:25:04.405421+00:00",
+  "last_reported": "2026-09-23T16:25:04.405421+00:00",
+  "last_updated": "2026-09-23T16:25:04.405421+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_charge_energy_added",
+  "state": "0.0",
+  "attributes": {
+   "unit_of_measurement": "kWh",
+   "device_class": "energy",
+   "friendly_name": "Tesla Charge energy added"
+  },
+  "last_changed": "2026-09-22T15:43:53.112774+00:00",
+  "last_reported": "2026-09-22T15:43:53.112774+00:00",
+  "last_updated": "2026-09-22T15:43:53.112774+00:00"
+ },
+ {
+  "entity_id": "sensor.tesla_install_perc",
+  "state": "1",
+  "attributes": {
+   "unit_of_measurement": "%",
+   "friendly_name": "Tesla Install progress"
+  },
+  "last_changed": "2026-09-21T01:14:22.953152+00:00",
+  "last_reported": "2026-09-21T01:14:22.953152+00:00",
+  "last_updated": "2026-09-21T01:14:22.953152+00:00"
+ },
+ {
+  "entity_id": "binary_sensor.garage_door",
+  "state": "off",
+  "attributes": {
+   "device_class": "opening",
+   "friendly_name": "Garage Door"
+  },
+  "last_changed": "2026-09-23T22:50:04.316909+00:00",
+  "last_reported": "2026-09-23T22:50:04.316909+00:00",
+  "last_updated": "2026-09-23T22:50:04.316909+00:00"
+ },
+ {
+  "entity_id": "sensor.garage_door_battery",
+  "state": "100.0",
+  "attributes": {
+   "state_class": "measurement",
+   "battery_voltage": 3.2,
+   "unit_of_measurement": "%",
+   "device_class": "battery",
+   "friendly_name": "Garage Door Battery"
+  },
+  "last_changed": "2026-09-23T21:30:34.098541+00:00",
+  "last_reported": "2026-09-23T21:30:34.098541+00:00",
+  "last_updated": "2026-09-23T21:30:34.098541+00:00"
+ },
+ {
+  "entity_id": "update.garage_door_firmware",
+  "state": "unknown",
+  "attributes": {
+   "auto_update": false,
+   "display_precision": 2,
+   "installed_version": "0x00002200",
+   "in_progress": false,
+   "latest_version": null,
+   "release_summary": null,
+   "release_url": null,
+   "skipped_version": null,
+   "title": null,
+   "update_percentage": null,
+   "device_class": "firmware",
+   "entity_picture": "/api/brands/integration/zha/icon.png",
+   "friendly_name": "Garage Door Firmware",
+   "supported_features": 23
+  },
+  "last_changed": "2026-09-23T21:30:34.113874+00:00",
+  "last_reported": "2026-09-23T21:30:34.113874+00:00",
+  "last_updated": "2026-09-23T21:30:34.113874+00:00"
+ },
+ {
+  "entity_id": "button.garage_door_identify",
+  "state": "unknown",
+  "attributes": {
+   "device_class": "identify",
+   "friendly_name": "Garage Door Identify"
+  },
+  "last_changed": "2026-09-23T21:30:34.122544+00:00",
+  "last_reported": "2026-09-23T21:30:34.122544+00:00",
+  "last_updated": "2026-09-23T21:30:34.122544+00:00"
+ },
+ {
+  "entity_id": "binary_sensor.garage_door_tamper",
+  "state": "on",
+  "attributes": {
+   "device_class": "tamper",
+   "friendly_name": "Garage Door Tamper"
+  },
+  "last_changed": "2026-09-23T22:50:07.145955+00:00",
+  "last_reported": "2026-09-23T22:50:07.145955+00:00",
+  "last_updated": "2026-09-23T22:50:07.145955+00:00"
+ },
+ {
+  "entity_id": "script.garage_door_ping",
+  "state": "off",
+  "attributes": {
+   "last_triggered": "2026-09-23T21:39:38.027055+00:00",
+   "mode": "queued",
+   "current": 0,
+   "max": 5,
+   "friendly_name": "Garage door ping"
+  },
+  "last_changed": "2026-09-23T21:39:38.246821+00:00",
+  "last_reported": "2026-09-23T21:39:38.246821+00:00",
+  "last_updated": "2026-09-23T21:39:38.246821+00:00"
+ },
+ {
+  "entity_id": "automation.garage_door_left_open",
+  "state": "on",
+  "attributes": {
+   "id": "garage_door_open_ping",
+   "last_triggered": null,
+   "mode": "queued",
+   "current": 0,
+   "max": 10,
+   "friendly_name": "Garage door - left open"
+  },
+  "last_changed": "2026-09-23T21:39:20.234402+00:00",
+  "last_reported": "2026-09-23T21:39:20.234402+00:00",
+  "last_updated": "2026-09-23T21:39:20.234402+00:00"
+ }
+]
