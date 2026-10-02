@@ -486,13 +486,15 @@ class HomeKioskCard extends HTMLElement {
     const cfg = this._cfg, id = cfg.car_climate, s = this._s(id);
     const soc = this._n(cfg.car_battery), km = this._n(cfg.car_range);
     const ch = this._s(cfg.car_charging);
-    let line = soc === null ? '' : `${Math.round(soc)}%`;
+    // Charge is the headline; the cabin temperature is only the status line under it.
+    const parts = [];
     if (km !== null) {
-      line += `, about ${Math.round(km * 0.621371)}&#160;miles`;
+      parts.push(`About ${Math.round(km * 0.621371)}&#160;miles`);
     }
     if (ch && ch.state === 'Charging') {
-      line += ' · Charging';
+      parts.push('Charging');
     }
+    const range = parts.join(' · ');
     const na = !s || DEAD.includes(s.state);
     const on = !na && s.state !== 'off';
     const a = na ? {} : s.attributes;
@@ -522,9 +524,10 @@ class HomeKioskCard extends HTMLElement {
     return `<div class="field car" style="background:${C.blue};color:#fff;${na ? 'opacity:.6' : ''}">
       <div class="carinfo">
         <div class="head"><span class="sq" style="background:#fff;border-radius:50%"></span><span>Car</span></div>
-        <div><div class="carread"><span class="temp">${cur === null ? '–' : deg(cur)}</span><span class="note bold">inside.</span></div>
-        <div class="carstatus">${status}</div></div>
-        <div class="carline">${line}</div>
+        <div><div class="temp">${soc === null ? '–' : `${Math.round(soc)}%`}</div>
+        <div class="carbar"><div style="width:${soc === null ? 0 : Math.max(0, Math.min(100, soc))}%"></div></div>
+        ${range ? `<div class="carrange">${range}</div>` : ''}</div>
+        <div class="carstatus">${na || cur === null ? '' : `${deg(cur)} inside. `}${status}</div>
       </div>
       <button class="carbtn${on && !p ? ' on' : ''}" data-act="car" data-entity="${id}" data-val="${on ? 'off' : 'on'}" ${na || (p && !p.fail) ? 'disabled' : ''} style="${btnStyle}">${btn}</button>
     </div>`;
@@ -595,8 +598,7 @@ button:active:not(:disabled) { transform:scale(.97); }
 .temp { font-family:'Archivo Black',sans-serif; font-size:60px; line-height:.95; letter-spacing:-.04em; }
 .note { font-size:19px; font-weight:500; line-height:1.25; }
 .note.bold { font-weight:700; }
-.carread { display:flex; align-items:baseline; gap:10px; }
-.carstatus { font-size:22px; font-weight:700; margin-top:6px; }
+.carstatus { font-size:19px; font-weight:700; line-height:1.25; }
 .stepper { display:grid; grid-template-columns:88px minmax(0,1fr) 88px; gap:8px; height:88px; margin-top:auto; flex:none; }
 .stepper button { background:#fff; color:${C.ink}; font-family:'Archivo Black',sans-serif; font-size:44px; line-height:1; }
 .stepper button:disabled { opacity:.35; }
@@ -611,10 +613,12 @@ button:active:not(:disabled) { transform:scale(.97); }
 .seg button.sel { border:0; background:#fff; color:${C.ink}; }
 .seg.dark button.sel { background:${C.yellow}; }
 .seg button:disabled { opacity:.4; }
-.car { display:grid; grid-template-columns:minmax(0,1fr) 200px; gap:16px; }
+.car { display:grid; grid-template-columns:minmax(0,1fr) 180px; gap:16px; }
 .carinfo { display:flex; flex-direction:column; justify-content:space-between; min-width:0; }
-.car .temp { font-size:46px; }
-.carline { font-size:18px; font-weight:500; }
+.car .temp { font-size:56px; line-height:.9; letter-spacing:-.045em; }
+.carbar { height:10px; margin-top:10px; background:rgba(255,255,255,.28); display:flex; }
+.carbar div { background:#fff; }
+.carrange { font-size:19px; font-weight:700; line-height:1.2; margin-top:8px; }
 .carbtn { background:#fff; color:${C.ink}; padding:0 12px; font-family:'Archivo Black',sans-serif; font-size:26px; line-height:1.05; letter-spacing:-.02em; }
 .carbtn small { font-family:'Instrument Sans',sans-serif; font-size:19px; font-weight:700; letter-spacing:0; }
 .carbtn.on { background:${C.yellow}; }
@@ -640,8 +644,9 @@ button:active:not(:disabled) { transform:scale(.97); }
 .roomy .detail { font-size:21px; margin-top:12px; line-height:1.32; }
 .roomy .reading { margin-top:12px; }
 .roomy .temp { font-size:80px; }
-.roomy .car .temp { font-size:60px; }
-.roomy .carstatus { font-size:24px; }
+.roomy .car .temp { font-size:72px; }
+.roomy .carbar { height:12px; margin-top:12px; }
+.roomy .carrange, .roomy .carstatus { font-size:21px; }
 .roomy .stepper { grid-template-columns:104px minmax(0,1fr) 104px; height:104px; }
 .roomy .lbl { margin-top:14px; }
 .roomy .seg { height:80px; }
