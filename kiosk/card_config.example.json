@@ -1,0 +1,19 @@
+{
+  "type": "custom:home-kiosk-card",
+  "battery": "sensor.<inverter>_battery",
+  "kiln_warning": "binary_sensor.kiln_warning_outstanding",
+  "kiln_firing": "binary_sensor.kiln_firing",
+  "evening_gap": "sensor.energy_ping_evening_gap",
+  "garage": "binary_sensor.<garage_door>",
+  "weather": "weather.<home>",
+  "heating": "climate.<thermostat>",
+  "hot_water": "water_heater.<boiler>",
+  "aircon": "climate.<aircon>",
+  "aircon_room": "Living room",
+  "car_climate": "climate.<car>_climate",
+  "car_battery": "sensor.<car>_battery",
+  "car_range": "sensor.<car>_range",
+  "car_charging": "sensor.<car>_charging_state",
+  "money_export": "input_number.daily_export_credit",
+  "lights": [{"entity": "light.<room>", "name": "<Room>"}]
+}

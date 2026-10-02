@@ -19,3 +19,10 @@ car_tile/backups/
 # headless-Chrome screenshots and profiles from car_tile/hashot.js can show a live location
 car_tile/*.png
 car_tile/chrome-prof-*/
+
+# kiosk card config holds entity ids and room names
+kiosk/card_config.local.json
+
+# kiosk test harness: screenshots and the live-state snapshot copy (meter serials)
+kiosk/test/out/
+kiosk/test/states.local.js

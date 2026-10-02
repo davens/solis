@@ -1,0 +1,50 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>html,body{margin:0;padding:0;background:#fff}</style>
+<script src="states.local.js"></script>
+<script src="scenarios.js"></script>
+<script>
+// Freeze the clock to the scenario time before the card loads.
+const name = location.hash.slice(1) || 'normal';
+const sc = window.SCENARIOS[name];
+const [hh, mm] = sc.time.split(':').map(Number);
+const FROZEN = new (Date)(2026, 9, 2, hh, mm, 0).getTime();
+const RealDate = Date;
+class FakeDate extends RealDate {
+  constructor(...a) { if (a.length === 0) { super(FROZEN); } else { super(...a); } }
+  static now() { return FROZEN; }
+}
+window.Date = FakeDate;
+window.addEventListener('error', e => console.error('PAGEERROR ' + e.message));
+window.addEventListener('unhandledrejection', e => console.error('REJECTION ' + e.reason));
+</script></head>
+<body>
+<script src="../home-kiosk-card.js"></script>
+<script>
+const merge = (a, b) => { for (const k in b) { if (b[k] && typeof b[k] === 'object' && !Array.isArray(b[k])) { a[k] = merge(a[k] || {}, b[k]); } else { a[k] = b[k]; } } return a; };
+const states = JSON.parse(JSON.stringify(window.SNAPSHOT));
+// Scenario keys are card-config keys ('battery', 'lights.2', 'lights.*'), so no entity id lives in the repo.
+const ids = key => {
+  const cfg = window.CARD_CONFIG, m = /^lights\.(\d+|\*)$/.exec(key);
+  const ent = l => (typeof l === 'string' ? l : l.entity);
+  if (m) {
+    return m[1] === '*' ? (cfg.lights || []).map(ent) : [ent(cfg.lights[+m[1]])];
+  }
+  return [cfg[key]];
+};
+for (const [key, o] of Object.entries(sc.states)) for (const id of ids(key)) {
+  const { minsAgo, ...rest } = JSON.parse(JSON.stringify(o));
+  states[id] = merge(states[id] || { entity_id: id, attributes: {} }, rest);
+  if (minsAgo !== undefined) { states[id].last_changed = new Date(FROZEN - minsAgo * 60000).toISOString(); }
+}
+const day = n => new Date(FROZEN + n * 86400000).toISOString();
+const hass = {
+  states,
+  callService: (d, s, data) => { console.log('callService', d, s, JSON.stringify(data)); return Promise.resolve(); },
+  connection: { subscribeMessage: (cb) => { setTimeout(() => cb({ forecast: [{ datetime: day(0), temperature: 20 }, { datetime: day(1), temperature: 17 }] }), 50); return Promise.resolve(() => {}); } },
+};
+fetch; // no network use beyond fonts
+const card = document.createElement('home-kiosk-card');
+card.setConfig(window.CARD_CONFIG);
+document.body.appendChild(card);
+card.hass = hass;
+</script></body></html>
