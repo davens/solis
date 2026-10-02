@@ -40,6 +40,14 @@ const day = n => new Date(FROZEN + n * 86400000).toISOString();
 const hass = {
   states,
   callService: (d, s, data) => { console.log('callService', d, s, JSON.stringify(data)); return Promise.resolve(); },
+  // A made-up day: heating 06:00-07:30 and 12:30-13:00, air con on from 13:47; entries after the frozen time are dropped.
+  callWS: () => {
+    const at = (h, m) => new RealDate(2026, 9, 2, h, m).getTime() / 1000, upTo = e => e.lu * 1000 <= FROZEN;
+    const heat = [[0, 0, 'idle'], [6, 0, 'heating'], [7, 30, 'idle'], [12, 30, 'heating'], [13, 0, 'idle']]
+      .map(([h, m, act]) => ({ s: 'heat', a: { hvac_action: act }, lu: at(h, m) })).filter(upTo);
+    const ac = [{ s: 'off', a: {}, lu: at(0, 0) }, { s: 'heat', lu: at(13, 47) }].filter(upTo);
+    return Promise.resolve({ [window.CARD_CONFIG.heating]: heat, [window.CARD_CONFIG.aircon]: ac });
+  },
   connection: { subscribeMessage: (cb) => { setTimeout(() => cb({ forecast: [{ datetime: day(0), temperature: 20 }, { datetime: day(1), temperature: 17 }] }), 50); return Promise.resolve(() => {}); } },
 };
 fetch; // no network use beyond fonts

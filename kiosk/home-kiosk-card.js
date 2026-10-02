@@ -22,11 +22,14 @@
 //   money_gas: sensor.<gas>_current_accumulative_cost              (optional; auto-found)
 //   money_export: input_number.daily_export_credit
 //   lights: [{entity: light.x, name: "Room"}, ...]
+//   heating_rooms: [{entity: sensor.x_temperature, name: "Room"}, ...]   one quiet line under the heating reading
+//   aircon_extras: [{entity: weather.<home> | sensor.x, name: "Outside"}, ...]   the same under air con
+// Under each reading, a strip shows when it ran since midnight, read from HA history.
 // Add #kiosk-demo=garage|kiln|kiln-warning to the URL to preview a band without the real event.
 
 const FONT_HREF = 'https://fonts.googleapis.com/css2?family=Archivo+Black&family=Instrument+Sans:wght@500;700&display=swap';
 const C = { paper: '#F4EFE4', ink: '#161616', grey: '#3F3F3A', red: '#D3261A', blue: '#1F4FB0', yellow: '#F2C230', amber: '#F2A516', green: '#2E7355', warn: '#AE4230', caution: '#B8832A' };
-const HOT_WATER = [['off', 'Off'], ['schedule', 'Schedule'], ['boost_1h', 'Boost 1 hr']];
+const HOT_WATER = [['off', 'Off'], ['schedule', 'Schedule'], ['boost_30m', 'Boost 30&#160;min']];
 const AIRCON = [['off', 'Off'], ['heat', 'Heat'], ['cool', 'Cool'], ['auto', 'Auto'], ['dry', 'Dry'], ['fan_only', 'Fan']];
 const WEATHER = { 'clear-night': 'Clear', cloudy: 'Cloudy', exceptional: 'Unusual weather', fog: 'Foggy', hail: 'Hail', lightning: 'Thunder', 'lightning-rainy': 'Thunder and rain', partlycloudy: 'Partly cloudy', pouring: 'Heavy rain', rainy: 'Rain', snowy: 'Snow', 'snowy-rainy': 'Sleet', sunny: 'Sunny', windy: 'Windy', 'windy-variant': 'Windy' };
 const DEAD = ['unavailable', 'unknown'];
@@ -37,6 +40,9 @@ const deg = v => `${Math.round(v)}&#176;`;
 const halfDeg = v => (Math.round(v * 2) / 2).toString().replace(/\.0$/, '') + '&#176;';
 const money = gbp => { const p = Math.round(Math.abs(gbp) * 100); return p < 100 ? `${p}p` : `£${(p / 100).toFixed(2)}`; };
 const dayKey = t => { const d = new Date(t); return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate(); };
+const midnight = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
+const dur = ms => { const m = Math.round(ms / 60000), h = Math.floor(m / 60); return h ? `${h}&#160;h${m % 60 ? ` ${m % 60}&#160;min` : ''}` : `${m}&#160;min`; };
+const RUNS_REFRESH_MS = 300000;
 
 class HomeKioskCard extends HTMLElement {
   setConfig(config) {
@@ -46,6 +52,7 @@ class HomeKioskCard extends HTMLElement {
       this._forecast = null;
     }
     this._cfg = config;
+    this._runs = null;     // {at, day, hist}: today's history for the heating and air con strips
     this._pend = {};       // key -> {want, until} optimistic state while a service call lands
     this._target = {};     // climate entity -> pending set-temperature from stepper taps
     this._gen = {};        // climate entity -> stepper adjustment generation
@@ -244,6 +251,83 @@ class HomeKioskCard extends HTMLElement {
     return t;
   }
 
+  // ---- today's runs -----------------------------------------------------------------------------------------
+
+  _fetchRuns() {
+    const h = this._hass, ids = [this._cfg.heating, this._cfg.aircon].filter(Boolean);
+    const day = dayKey(Date.now());
+    if (!h || !h.callWS || !ids.length || this._runsBusy || (this._runs && this._runs.day === day && Date.now() - this._runs.at < RUNS_REFRESH_MS)) {
+      return;
+    }
+    this._runsBusy = true;
+    // Attribute changes matter (the thermostat's hvac_action), so ask for every change, not just significant ones.
+    h.callWS({ type: 'history/history_during_period', start_time: new Date(midnight()).toISOString(), entity_ids: ids,
+      significant_changes_only: false, minimal_response: false, no_attributes: false })
+      .then(r => { this._runs = { at: Date.now(), day, hist: r || {} }; },
+        () => { this._runs = { at: Date.now(), day, hist: null }; })
+      .finally(() => {
+        this._runsBusy = false;
+        // Right after a finger lifts, the pending post-tap render owns the rebuild; one here could swallow the click.
+        if (!this._timers.up) {
+          this._render();
+        }
+      });
+  }
+
+  // Spans since midnight where isOn(state, attributes) held, from history plus the live state; null without history.
+  _ran(id, isOn) {
+    const r = this._runs;
+    if (!r || !r.hist || r.day !== dayKey(Date.now())) {
+      return null;
+    }
+    const start = midnight(), now = Date.now();
+    let attrs = {};
+    // Clamp every time into [midnight, now]: an iPad clock behind HA's must not count time that has not happened here.
+    const clamp = t => Math.min(now, Math.max(start, t));
+    const pts = (r.hist[id] || []).map(e => { attrs = e.a || attrs; return { t: clamp(e.lu * 1000), on: isOn(e.s, attrs) }; });
+    const live = this._s(id);
+    if (live && (!pts.length || Date.parse(live.last_updated) > pts[pts.length - 1].t)) {
+      pts.push({ t: clamp(Date.parse(live.last_updated) || now), on: isOn(live.state, live.attributes) });
+    }
+    const spans = [];
+    pts.forEach((p, i) => {
+      const end = i + 1 < pts.length ? pts[i + 1].t : now;
+      if (p.on && end > p.t) {
+        const last = spans[spans.length - 1];
+        if (last && last[1] === p.t) {
+          last[1] = end;
+        } else {
+          spans.push([p.t, end]);
+        }
+      }
+    });
+    return { spans, total: spans.reduce((t, [a, b]) => t + b - a, 0) };
+  }
+
+  _reading(item) {
+    const s = this._s(item.entity);
+    if (!s || DEAD.includes(s.state)) {
+      return null;
+    }
+    const v = item.entity.startsWith('weather.') ? num(s.attributes.temperature) : num(s.state);
+    if (v === null) {
+      return null;
+    }
+    return `${esc(item.name)} ${s.attributes.unit_of_measurement === '%' ? `${Math.round(v)}%` : deg(v)}`;
+  }
+
+  _extraHtml(items, runs, verb, color) {
+    const parts = (items || []).map(i => this._reading(i)).filter(Boolean);
+    let html = parts.length ? `<div class="rooms">${parts.join(' &#183; ')}</div>` : '';
+    if (runs) {
+      const day = 86400000, start = midnight(), pct = t => ((t - start) / day * 100).toFixed(2);
+      html += `<div class="ranlbl">${verb} ${dur(runs.total)} today</div>
+        <div class="strip">${runs.spans.map(([a, b]) => `<b style="left:${pct(a)}%;width:${(Math.max(b - a, 120000) / day * 100).toFixed(2)}%;background:${color}"></b>`).join('')}<i style="left:${pct(Date.now())}%"></i></div>
+        <div class="ticks"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>`;
+    }
+    return html ? `<div class="extra">${html}</div>` : '';
+  }
+
   // ---- actions --------------------------------------------------------------------------------------------
 
   _call(domain, service, data, pendKey, want) {
@@ -349,6 +433,7 @@ class HomeKioskCard extends HTMLElement {
     if (this._ptrs.size && !force) {
       return;
     }
+    this._fetchRuns();
     const top = this.getBoundingClientRect().top;
     const h = Math.max(600, window.innerHeight - Math.max(0, top));
     const html = this._html(h);
@@ -445,17 +530,18 @@ class HomeKioskCard extends HTMLElement {
     const hwId = this._cfg.hot_water, hw = this._s(hwId);
     let hwRow = '';
     if (hw) {
-      const p = this._pending(hwId, hw.state.startsWith('boost') ? 'boost_1h' : hw.state);
+      const p = this._pending(hwId, hw.state.startsWith('boost') ? 'boost_30m' : hw.state);
       const mode = p && p.want ? p.want : hw.state;
       hwRow = `<div class="lbl">Hot water${p && p.fail ? ' <span class="err">· no response</span>' : ''}</div>
       <div class="seg" style="grid-template-columns:1fr 1.4fr 1.4fr">${HOT_WATER.map(([k, l]) => {
-        const sel = k === mode || (k === 'boost_1h' && mode.startsWith('boost'));
+        const sel = k === mode || (k === 'boost_30m' && mode.startsWith('boost'));
         return `<button data-act="hw" data-entity="${hwId}" data-val="${k}" class="${sel ? 'sel' : ''}" aria-pressed="${sel}" ${DEAD.includes(hw.state) ? 'disabled' : ''}>${l}</button>`;
       }).join('')}</div>`;
     }
     return `<div class="field" style="background:${C.red};color:#fff">
       <div class="head"><svg width="22" height="20" viewBox="0 0 26 24" aria-hidden="true"><path d="M13 0 L26 24 L0 24 Z" fill="#fff"></path></svg><span>Heating${this._stepErr(id)}</span></div>
       <div class="reading"><span class="temp">${cur === null ? '–' : deg(cur)}</span><span class="note">Hallway.<br>${word}</span></div>
+      ${this._extraHtml(this._cfg.heating_rooms, this._ran(id, (st, a) => a.hvac_action === 'heating'), 'Ran', '#fff')}
       ${this._stepper(id, s, 'heating')}
       ${hwRow}
     </div>`;
@@ -475,6 +561,7 @@ class HomeKioskCard extends HTMLElement {
     return `<div class="field" style="background:${C.ink};color:#fff">
       <div class="head"><span class="sq" style="background:${C.yellow}"></span><span>Air con${this._stepErr(id)}</span></div>
       <div class="reading"><span class="temp">${cur === null ? '–' : deg(cur)}</span><span class="note">${esc(this._cfg.aircon_room || 'Living room')}.<br>${note}</span></div>
+      ${this._extraHtml(this._cfg.aircon_extras, this._ran(id, st => st !== 'off' && !DEAD.includes(st)), 'On', C.yellow)}
       ${this._stepper(id, { ...s, state: mode }, 'air con')}
       <div class="lbl">Mode${p && p.fail ? ' <span class="err">· no response</span>' : ''}</div>
       <div class="seg dark" style="grid-template-columns:repeat(${modes.length},minmax(0,1fr))">${modes.map(([k, l]) =>
@@ -595,6 +682,14 @@ button:active:not(:disabled) { transform:scale(.97); }
 .field { padding:20px; display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
 .head { display:flex; align-items:center; gap:10px; font-size:20px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; }
 .reading { display:flex; align-items:center; gap:12px; margin-top:8px; }
+.extra { display:none; margin:16px 0 14px; }
+.rooms { font-size:18px; font-weight:700; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ranlbl { font-size:16px; font-weight:700; opacity:.85; margin:12px 0 6px; }
+.extra > .ranlbl:first-child { margin-top:0; }
+.strip { position:relative; height:12px; background:rgba(255,255,255,.22); }
+.strip b { position:absolute; top:0; bottom:0; }
+.strip i { position:absolute; top:-5px; bottom:-5px; width:3px; background:#fff; }
+.ticks { display:flex; justify-content:space-between; font-size:14px; font-weight:700; opacity:.8; margin-top:5px; }
 .temp { font-family:'Archivo Black',sans-serif; font-size:60px; line-height:.95; letter-spacing:-.04em; }
 .note { font-size:19px; font-weight:500; line-height:1.25; }
 .note.bold { font-weight:700; }
@@ -643,6 +738,7 @@ button:active:not(:disabled) { transform:scale(.97); }
 .roomy .word { font-size:30px; display:block; margin-top:6px; }
 .roomy .detail { font-size:21px; margin-top:12px; line-height:1.32; }
 .roomy .reading { margin-top:12px; }
+.roomy .extra { display:block; }
 .roomy .temp { font-size:80px; }
 .roomy .car .temp { font-size:72px; }
 .roomy .carbar { height:12px; margin-top:12px; }

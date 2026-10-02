@@ -15,5 +15,26 @@
   "car_range": "sensor.<car>_range",
   "car_charging": "sensor.<car>_charging_state",
   "money_export": "input_number.daily_export_credit",
-  "lights": [{"entity": "light.<room>", "name": "<Room>"}]
+  "lights": [
+    {
+      "entity": "light.<room>",
+      "name": "<Room>"
+    }
+  ],
+  "heating_rooms": [
+    {
+      "entity": "sensor.<room>_temperature",
+      "name": "<Room>"
+    }
+  ],
+  "aircon_extras": [
+    {
+      "entity": "weather.<home>",
+      "name": "Outside"
+    },
+    {
+      "entity": "sensor.<room>_humidity",
+      "name": "Humidity"
+    }
+  ]
 }

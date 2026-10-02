@@ -14,7 +14,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function world({ time = [2026, 9, 2, 14, 32], states = {}, config = {} } = {}) {
+function world({ time = [2026, 9, 2, 14, 32], states = {}, config = {}, history } = {}) {
   let now = new RealDate(...time).getTime();
   let seq = 0;
   const timers = new Map();
@@ -71,7 +71,7 @@ function world({ time = [2026, 9, 2, 14, 32], states = {}, config = {} } = {}) {
   vm.runInContext(SRC, ctx);
   vm.runInContext(`{${SRC}}`, ctx); // a second load in its own scope, as a re-imported module, must not throw on define
   const Card = registry.get('home-kiosk-card');
-  const calls = [], pendingCalls = [], subs = [];
+  const calls = [], pendingCalls = [], subs = [], ws = [];
   const hass = {
     states: {
       'climate.heat': { state: 'heat', attributes: { temperature: 21, current_temperature: 19, target_temp_step: 0.5, min_temp: 5, max_temp: 30 } },
@@ -87,6 +87,7 @@ function world({ time = [2026, 9, 2, 14, 32], states = {}, config = {} } = {}) {
     // Each call returns a promise the test settles by hand.
     callService: (d, s, data) => { const x = deferred(); calls.push([d, s, data]); pendingCalls.push(x); return x.promise; },
     connection: { subscribeMessage: (cb, msg) => { const x = deferred(); subs.push({ cb, msg, ...x }); return x.promise; } },
+    callWS: msg => { ws.push(msg); return history ? Promise.resolve(history) : Promise.reject(new Error('no history')); },
   };
   const card = new Card();
   card.setConfig({ heating: 'climate.heat', aircon: 'climate.ac', car_climate: 'climate.car', hot_water: 'water_heater.hw', weather: 'weather.home', money_import: 'sensor.imp', money_gas: 'sensor.gas', money_export: 'input_number.exp', ...config });
@@ -117,7 +118,7 @@ function world({ time = [2026, 9, 2, 14, 32], states = {}, config = {} } = {}) {
     }
     card.hass = { ...hass };
   };
-  return { card, hass, calls, pendingCalls, subs, timers, advance, html, button, click, update, setNow: t => { now = t; } };
+  return { card, hass, calls, pendingCalls, subs, ws, timers, advance, html, button, click, update, setNow: t => { now = t; } };
 }
 
 const tests = [];
@@ -227,11 +228,11 @@ test('car: unavailable does not acknowledge a pending off', async () => {
 
 test('hot water: Boost pending clears on any boost* state', async () => {
   const w = world();
-  w.click('hw', 'water_heater.hw', 'boost_1h');
+  w.click('hw', 'water_heater.hw', 'boost_30m');
   assert.ok(w.card._pend['water_heater.hw']);
   w.update({ 'water_heater.hw': { state: 'boost' } });
   assert.strictEqual(w.card._pend['water_heater.hw'], undefined);
-  assert.ok(w.button('hw', 'water_heater.hw', 'boost_1h') && /class="sel"/.test(w.html()));
+  assert.ok(w.button('hw', 'water_heater.hw', 'boost_30m') && /class="sel"/.test(w.html()));
 });
 
 test('forecast: failure retries with backoff, not on every hass update', async () => {
@@ -328,6 +329,49 @@ test('money: an unavailable configured part hides the net; negative cost reads a
 test('weather: unknown state is escaped', async () => {
   const w = world({ states: { 'weather.home': { state: '<b>x</b>', attributes: {} } } });
   assert.ok(w.html().includes('&lt;b&gt;x&lt;/b&gt;'));
+});
+
+test('today: rooms line, extras, and run strips from history', async () => {
+  const at = (h, m) => new RealDate(2026, 9, 2, h, m).getTime() / 1000;
+  const w = world({
+    states: {
+      'sensor.m': { state: '21.4', attributes: { unit_of_measurement: '°C' } },
+      'sensor.e': { state: 'unavailable', attributes: {} },
+      'sensor.rh': { state: '55.2', attributes: { unit_of_measurement: '%' } },
+    },
+    config: {
+      heating_rooms: [{ entity: 'sensor.m', name: 'Bedroom' }, { entity: 'sensor.e', name: 'Nursery' }],
+      aircon_extras: [{ entity: 'weather.home', name: 'Outside' }, { entity: 'sensor.rh', name: 'Humidity' }],
+    },
+    history: {
+      // Only the first entry carries attributes when they do not change; later ones inherit them.
+      'climate.heat': [{ s: 'heat', a: { hvac_action: 'idle' }, lu: at(0, 0) }, { s: 'heat', a: { hvac_action: 'heating' }, lu: at(6, 0) },
+        { s: 'heat', a: { hvac_action: 'idle' }, lu: at(7, 30) }, { s: 'heat', a: { hvac_action: 'heating' }, lu: at(12, 30) },
+        { s: 'heat', a: { hvac_action: 'idle' }, lu: at(13, 0) }],
+      'climate.ac': [{ s: 'off', a: {}, lu: at(0, 0) }, { s: 'cool', lu: at(13, 47) }],
+    },
+  });
+  await w.advance(0);
+  w.card._render(true);
+  const h = w.html();
+  assert.ok(h.includes('Bedroom 21&#176;') && !h.includes('Nursery'), 'rooms line skips an unavailable sensor');
+  assert.ok(h.includes('Outside 18&#176; &#183; Humidity 55%'), 'extras read weather temperature and % sensors');
+  assert.ok(h.includes('Ran 2&#160;h today'), 'heating counts hvac_action heating only');
+  assert.ok(h.includes('On 45&#160;min today'), 'air con counts any mode but off, up to now');
+  assert.strictEqual(w.ws.length, 1);
+  assert.strictEqual(w.ws[0].significant_changes_only, false);
+  await w.advance(60000);
+  assert.strictEqual(w.ws.length, 1, 'no refetch inside five minutes');
+  await w.advance(300000);
+  assert.strictEqual(w.ws.length, 2, 'refetched after five minutes');
+});
+
+test('today: no history means no strip, and a failed fetch is not retried on every render', async () => {
+  const w = world();
+  await w.advance(0);
+  assert.ok(!w.html().includes('today</div>') && !w.html().includes('class="strip"'));
+  await w.advance(60000);
+  assert.strictEqual(w.ws.length, 1);
 });
 
 (async () => {
