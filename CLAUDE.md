@@ -87,6 +87,11 @@ These bite people who are working on something else, so they stay here rather th
 - **After any HACS update of ha-sankey-chart, re-apply the 5-minute patch.** HACS silently
   overwrites it and nothing errors -- the chart just goes back to lagging by up to an hour. Detect
   with `grep -c 5minute ha-sankey-chart.js`: **1 = patched, 0 = reverted.** -- `docs/sankey.md`
+- **After any HACS update of nest_legacy, re-apply the cookie-rotation patch.** HACS overwrites it
+  silently and nothing errors -- the Google sign-in just goes back to dying sooner. It will not be
+  upstreamed. Whenever a HACS update, an HA restart or a Nest sign-in problem comes up, run
+  `uv run --no-project python nest_rotate_patch.py --check` (exit 1 = reverted), then apply it and
+  restart HA. To re-sign Nest, use `nest_reauth.py`.
 - **Two copies of the forecast calibration constants exist and can drift silently** -- the repo's
   `solar_forecast.py` and the vendored copy in the integration. A refit reaches HA only when the
   vendored copy is updated. Re-check parity after any `calibrate` run. -- `docs/forecast.md`
@@ -162,6 +167,7 @@ uv run --no-project python solar_forecast.py
 uv run --no-project python solar_forecast.py record 2026-08-20 32
 uv run --no-project python solar_forecast.py calibrate
 uv run --no-project --with websockets python nest_reauth.py login   # Nest Legacy Google re-sign-in; see its docstring
+uv run --no-project python nest_rotate_patch.py --check   # is the nest_legacy cookie-rotation patch still applied?
 ~~~
 
 There is still no `pyproject.toml`, and no test, lint or non-Docker build workflow is recorded.
