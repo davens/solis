@@ -161,6 +161,7 @@ docker compose up -d --build
 uv run --no-project python solar_forecast.py
 uv run --no-project python solar_forecast.py record 2026-08-20 32
 uv run --no-project python solar_forecast.py calibrate
+uv run --no-project --with websockets python nest_reauth.py login   # Nest Legacy Google re-sign-in; see its docstring
 ~~~
 
 There is still no `pyproject.toml`, and no test, lint or non-Docker build workflow is recorded.
