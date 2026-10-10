@@ -10,7 +10,7 @@ door lives in the header row, left of the lock: quiet (nothing) when closed, amb
 
 Tiles: OpenStreetMap standard (`tile.openstreetmap.org/{z}/{x}/{y}.png`, keyless, 256 px), z14 so
 village/district names can answer "where", inverted to dark with
-`invert(1) hue-rotate(180deg) brightness(0.55) contrast(0.95) saturate(0.35)` on a tiles-only div (the
+`invert(1) hue-rotate(180deg) brightness(0.9) contrast(0.95) saturate(0.5)` on a tiles-only div (the
 marker stays white). "© OpenStreetMap" at 8 px / 0.28 alpha in the bottom-right corner of the map
 region, only while a map is drawn.
 

@@ -20,7 +20,7 @@ const gTxt = gOpen ? 'Garage open' + (gDur ? ' · ' + gDur : '') : '';
 const gGar = c => `<svg width='11' height='11' viewBox='0 0 13 13' style='flex:none;'><path d='M1 12 V5.2 L6.5 1.4 L12 5.2 V12' fill='none' stroke='${c}' stroke-width='1.4' stroke-linejoin='round' stroke-linecap='round'/><path d='M3.6 12 V7 H9.4 V12' fill='none' stroke='${c}' stroke-width='1.4' stroke-linejoin='round'/><path d='M3.6 9.5 H9.4' fill='none' stroke='${c}' stroke-width='1.2' stroke-linecap='round'/></svg>`;
 /* tiles: OpenStreetMap standard (keyless, 256 px, z/x/y), inverted to dark by a CSS filter on the mosaic */
 const tileUrl = (z, x, y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
-const tileFilter = 'invert(1) hue-rotate(180deg) brightness(0.55) contrast(0.95) saturate(0.35)';
+const tileFilter = 'invert(1) hue-rotate(180deg) brightness(0.9) contrast(0.95) saturate(0.5)';
 const osmCredit = `<div style='position:absolute;right:5px;bottom:3px;font-size:8px;line-height:1;color:rgba(255,255,255,0.28);letter-spacing:0.01em;white-space:nowrap;pointer-events:none;'>© OpenStreetMap</div>`;
 /* map maths: Web-Mercator world pixels at zoom z; 256 css px tiles */
 const wpx = (p, z) => { const n = 256 * Math.pow(2, z); const s = Math.sin(p.lat * R2); return { x: (p.lon + 180) / 360 * n, y: (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * n }; };
