@@ -53,7 +53,9 @@ async def main():
         if not any(d['url_path'] == URL_PATH for d in await call(ws, {'type': 'lovelace/dashboards/list'})):
             await call(ws, {'type': 'lovelace/dashboards/create', 'url_path': URL_PATH, 'title': 'Home kiosk', 'icon': 'mdi:tablet-dashboard', 'mode': 'storage', 'show_in_sidebar': True, 'require_admin': False})
             print('created dashboard', URL_PATH)
-        cfg = {'views': [{'title': 'Home', 'path': 'home', 'type': 'panel', 'cards': [card]}]}
+        # Kiosk Mode (HACS) hides HA's top bar and sidebar here; ?disable_km on the URL brings them back for one visit.
+        cfg = {'kiosk_mode': {'hide_header': True, 'hide_sidebar': True},
+               'views': [{'title': 'Home', 'path': 'home', 'type': 'panel', 'cards': [card]}]}
         await call(ws, {'type': 'lovelace/config/save', 'url_path': URL_PATH, 'config': cfg})
         back = await call(ws, {'type': 'lovelace/config', 'url_path': URL_PATH})
         ok = back['views'][0]['cards'][0] == card

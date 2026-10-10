@@ -4,7 +4,8 @@
 <script src="scenarios.js"></script>
 <script>
 // Freeze the clock to the scenario time before the card loads.
-const name = location.hash.slice(1) || 'normal';
+// '#car-waiting&kiosk-theme=walala': the scenario, then anything the card itself reads from the hash.
+const name = location.hash.slice(1).split('&')[0] || 'normal';
 const sc = window.SCENARIOS[name];
 const [hh, mm] = sc.time.split(':').map(Number);
 const FROZEN = new (Date)(2026, 9, 2, hh, mm, 0).getTime();
@@ -22,31 +23,43 @@ window.addEventListener('unhandledrejection', e => console.error('REJECTION ' + 
 <script>
 const merge = (a, b) => { for (const k in b) { if (b[k] && typeof b[k] === 'object' && !Array.isArray(b[k])) { a[k] = merge(a[k] || {}, b[k]); } else { a[k] = b[k]; } } return a; };
 const states = JSON.parse(JSON.stringify(window.SNAPSHOT));
-// Scenario keys are card-config keys ('battery', 'lights.2', 'lights.*'), so no entity id lives in the repo.
+// Scenario keys are card-config keys ('battery', 'lights.2', 'lights.*', 'car_alerts.0'), so no entity id lives in the repo.
 const ids = key => {
-  const cfg = window.CARD_CONFIG, m = /^lights\.(\d+|\*)$/.exec(key);
+  const cfg = window.CARD_CONFIG, m = /^(lights|car_alerts)\.(\d+|\*)$/.exec(key);
   const ent = l => (typeof l === 'string' ? l : l.entity);
   if (m) {
-    return m[1] === '*' ? (cfg.lights || []).map(ent) : [ent(cfg.lights[+m[1]])];
+    const list = cfg[m[1]] || [];
+    return m[2] === '*' ? list.map(ent) : [ent(list[+m[2]])];
   }
   return [cfg[key]];
 };
 for (const [key, o] of Object.entries(sc.states)) for (const id of ids(key)) {
-  const { minsAgo, ...rest } = JSON.parse(JSON.stringify(o));
+  const { minsAgo, atMins, ...rest } = JSON.parse(JSON.stringify(o));
   states[id] = merge(states[id] || { entity_id: id, attributes: {} }, rest);
+  if (atMins !== undefined) { states[id].state = new Date(FROZEN + atMins * 60000).toISOString(); }
   if (minsAgo !== undefined) { states[id].last_changed = new Date(FROZEN - minsAgo * 60000).toISOString(); }
+}
+// Octopus Intelligent: slots given as [start, end] minutes from the frozen time, under a made-up device prefix.
+if (sc.octopus) {
+  const dev = 'octopus_energy_demo_intelligent_', at = m => new Date(FROZEN + m * 60000).toISOString();
+  states[`binary_sensor.${dev}dispatching`] = { state: 'off', attributes: { planned_dispatches: sc.octopus.slots.map(([a, b]) => ({ start: at(a), end: at(b) })) } };
+  states[`number.${dev}charge_target`] = { state: String(sc.octopus.target), attributes: {} };
+  states[`time.${dev}target_time`] = { state: sc.octopus.by, attributes: {} };
 }
 const day = n => new Date(FROZEN + n * 86400000).toISOString();
 const hass = {
   states,
   callService: (d, s, data) => { console.log('callService', d, s, JSON.stringify(data)); return Promise.resolve(); },
-  // A made-up day: heating 06:00-07:30 and 12:30-13:00, air con on from 13:47; entries after the frozen time are dropped.
+  // A made-up day: heating 06:00-07:30 and 12:30-13:00; the air con's hourly Wh counter shows it working until about 10:50,
+  // then on standby. Entries after the frozen time are dropped.
   callWS: () => {
     const at = (h, m) => new RealDate(2026, 9, 2, h, m).getTime() / 1000, upTo = e => e.lu * 1000 <= FROZEN;
     const heat = [[0, 0, 'idle'], [6, 0, 'heating'], [7, 30, 'idle'], [12, 30, 'heating'], [13, 0, 'idle']]
       .map(([h, m, act]) => ({ s: 'heat', a: { hvac_action: act }, lu: at(h, m) })).filter(upTo);
-    const ac = [{ s: 'off', a: {}, lu: at(0, 0) }, { s: 'heat', lu: at(13, 47) }].filter(upTo);
-    return Promise.resolve({ [window.CARD_CONFIG.heating]: heat, [window.CARD_CONFIG.aircon]: ac });
+    const ac = [[0, 0, 1605], [0, 49, 152], [1, 49, 346], [2, 49, 558], [3, 49, 760], [4, 49, 960], [5, 49, 1169], [6, 49, 1385],
+      [7, 49, 1600], [8, 49, 1820], [9, 49, 2027], [10, 49, 2175], [11, 49, 2186], [12, 49, 2197], [13, 49, 2208], [14, 49, 2219]]
+      .map(([h, m, v]) => ({ s: String(v), lu: at(h, m) })).filter(upTo);
+    return Promise.resolve({ [window.CARD_CONFIG.heating]: heat, [window.CARD_CONFIG.aircon_energy]: ac });
   },
   connection: { subscribeMessage: (cb) => { setTimeout(() => cb({ forecast: [{ datetime: day(0), temperature: 20 }, { datetime: day(1), temperature: 17 }] }), 50); return Promise.resolve(() => {}); } },
 };

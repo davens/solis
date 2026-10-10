@@ -1,19 +1,64 @@
 {
   "type": "custom:home-kiosk-card",
+  "theme_entity": "input_select.kiosk_theme",
   "battery": "sensor.<inverter>_battery",
   "kiln_warning": "binary_sensor.kiln_warning_outstanding",
   "kiln_firing": "binary_sensor.kiln_firing",
   "evening_gap": "sensor.energy_ping_evening_gap",
+  "low_power": "binary_sensor.energy_ping_low_power",
+  "ping_morning": "input_datetime.energy_ping_last",
+  "solar_power": "sensor.<inverter>_solar_power",
+  "house_load": "sensor.<inverter>_house_load",
+  "grid_power": "sensor.<inverter>_grid_power",
+  "battery_power": "sensor.<inverter>_battery_power",
   "garage": "binary_sensor.<garage_door>",
   "weather": "weather.<home>",
   "heating": "climate.<thermostat>",
   "hot_water": "water_heater.<boiler>",
   "aircon": "climate.<aircon>",
   "aircon_room": "Living room",
+  "aircon_energy": "sensor.<aircon>_energy_today",
+  "aircon_fallback": "sensor.<room>_temperature",
   "car_climate": "climate.<car>_climate",
   "car_battery": "sensor.<car>_battery",
   "car_range": "sensor.<car>_range",
   "car_charging": "sensor.<car>_charging_state",
+  "car_state": "sensor.<car>_state",
+  "car_plugged": "binary_sensor.<car>_plugged_in",
+  "car_locked": "binary_sensor.<car>_locked",
+  "car_power": "sensor.<car>_charger_power",
+  "car_energy_added": "sensor.<car>_charge_energy_added",
+  "car_time_to_full": "sensor.<car>_time_to_full_charge",
+  "car_speed": "sensor.<car>_speed",
+  "car_charge_limit": "sensor.<car>_charge_limit",
+  "car_link": "binary_sensor.teslamate_healthy",
+  "car_alerts": [
+    {
+      "entity": "binary_sensor.<car>_doors_open",
+      "name": "Doors open"
+    },
+    {
+      "entity": "binary_sensor.<car>_windows_open",
+      "name": "Windows open"
+    },
+    {
+      "entity": "binary_sensor.<car>_trunk_open",
+      "name": "Boot open"
+    },
+    {
+      "entity": "binary_sensor.<car>_frunk_open",
+      "name": "Frunk open"
+    },
+    {
+      "entity": "binary_sensor.<car>_sentry",
+      "name": "Sentry",
+      "info": true
+    }
+  ],
+  "dishwasher": "sensor.<dishwasher>_operation_state",
+  "dishwasher_programme": "select.<dishwasher>_active_programme",
+  "dishwasher_finish": "sensor.<dishwasher>_programme_finish_time",
+  "dishwasher_door": "sensor.<dishwasher>_door",
   "money_export": "input_number.daily_export_credit",
   "lights": [
     {
