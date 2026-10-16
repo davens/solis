@@ -1,0 +1,27 @@
+# ---------------------------------------------------------------------------
+# Fridge stalled: the plug is on but the fridge has drawn no power for an hour.
+#
+# The off and offline alerts catch a plug problem. This catches a fridge that
+# has died (compressor, board or thermostat) while its plug stays on, which
+# only shows up as missing power draw.
+#
+# Measured 2026-10-11 to 2026-10-16 (five days, ~115 rests): between runs the
+# plug reads exactly 0 W, and the longest rest was 29 minutes. Runs draw ~84 W,
+# and defrost runs a ~190 W heater, so defrost never looks like a stall. 60
+# minutes is twice the longest normal rest.
+#
+# delay_on is a timer on the template's result, so it fires even though the
+# power sensor sends no new reading while it sits at 0. A missing power reading
+# makes this unavailable rather than stalled; a dead plug is the offline alert's
+# job.
+# ---------------------------------------------------------------------------
+
+template:
+  - binary_sensor:
+      - name: "Fridge stalled"
+        unique_id: fridge_stalled_no_draw
+        device_class: problem
+        availability: "{{ has_value('switch.fridge') and has_value('sensor.fridge_power') }}"
+        state: "{{ is_state('switch.fridge', 'on') and states('sensor.fridge_power') | float(0) < 5 }}"
+        delay_on:
+          minutes: 60
