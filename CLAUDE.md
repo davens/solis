@@ -254,7 +254,10 @@ there is a bulletproof restore; a slot left active grid-charges at 30p.
 
 The owner chose 43141 = 50 A deliberately: 0.17C on 300 Ah, roughly 5.5 h from the 10% floor. It may stop
 around 97-98% after an empty start; that is accepted as kinder to LFP than holding 100%. **The floor is
-10%, not 20%.**
+12%, not 10% or 20%.** Verified 2026-10-16 from raw history: discharge cut to ~78 W standby the moment SOC
+reached 12% (7 Oct 19:26, 12 Oct 23:25). Standby then drifts it to 11%, where the inverter grid-charges back
+to 13% for a few minutes (7 Oct 22:11), so daily minimums of 10-11% are drift, not usable energy. The 10%
+figures above are the older assumption; the difference is about 0.3 kWh.
 
 Battery charge/discharge tops out at 5 kW, owner-stated, below the inverter's 6 kW. 43142 does **not** cap
 self-use house supply; the owner says it limits timed discharge-to-grid. Leave its deliberate 50 A setting
