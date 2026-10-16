@@ -60,6 +60,7 @@
   "dishwasher": "sensor.<dishwasher>_operation_state",
   "dishwasher_programme": "select.<dishwasher>_active_programme",
   "dishwasher_finish": "sensor.<dishwasher>_programme_finish_time",
+  "dishwasher_delay": "number.<dishwasher>_start_in_relative",
   "dishwasher_door": "sensor.<dishwasher>_door",
   "money_export": "input_number.daily_export_credit",
   "lights": [

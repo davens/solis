@@ -42,6 +42,7 @@
 //   dishwasher: sensor.<dishwasher>_operation_state   Home Connect: run | delayedstart | finished | ready ...
 //   dishwasher_programme: select.<dishwasher>_active_programme
 //   dishwasher_finish: sensor.<dishwasher>_programme_finish_time   a timestamp
+//   dishwasher_delay: number.<dishwasher>_start_in_relative   seconds until a delayed start begins
 //   dishwasher_door: sensor.<dishwasher>_door      open | closed
 //   car_alerts: [{entity: binary_sensor.<car>_trunk_open, name: "Boot open"}, {entity: ..., name: "Sentry", info: true}]
 // Tonight's charge slots and target come from the Octopus Intelligent entities, found by their name.
@@ -337,21 +338,24 @@ class HomeKioskCard extends HTMLElement {
     const prog = dishProgramme(active.state);
     const fin = Date.parse((this._s(cfg.dishwasher_finish) || {}).state);
     const hm = t => new Date(t).toTimeString().slice(0, 5);
-    const prog2 = prog ? `${prog}, ` : '';
     // Home Connect sometimes drops the 'run' event, leaving the state at 'ready'. An active programme
     // only exists while a cycle is on, so trust it for a few hours (HA reloads the link to fetch the rest).
     const missed = st.state === 'ready' && prog && Date.now() - Date.parse(active.last_changed) < 4 * 3600000;
     const run = st.state === 'run' || missed;
-    if (run && fin) {
-      const mins = Math.max(0, Math.round((fin - Date.now()) / 60000));
-      const left = mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins} min`;
-      return { color: 'dish', text: `Dishwasher · ${left} left<br>${prog2}done ${hm(fin)}.` };
-    }
     if (run) {
-      return { color: 'dish', text: `Dishwasher running.${prog ? `<br>${prog}.` : ''}` };
+      const when = fin ? `done ~${hm(fin)}` : prog;
+      return { color: 'dish', text: `Dishwasher: running${when ? `<br>${when}.` : '.'}` };
     }
     if (st.state === 'delayedstart') {
-      return { color: 'dish', text: `Dishwasher waiting.<br>${fin ? `${prog2}done ${hm(fin)}.` : `${prog || 'Starts later'}.`}` };
+      // While waiting, the finish time is set-time + programme length and ignores the delay, so the start is the delay
+      // still to run and the finish adds that length (finish minus when it was set). Without the delay entity neither
+      // time can be derived, so say none.
+      const delay = parseFloat((this._s(cfg.dishwasher_delay) || {}).state);
+      if (fin && delay >= 0) {
+        const start = Date.now() + delay * 1000;
+        return { color: 'dish', text: `Dishwasher: delayed start<br>starts ${hm(start)}, done ~${hm(start + fin - Date.parse(this._s(cfg.dishwasher_finish).last_changed))}.` };
+      }
+      return { color: 'dish', text: `Dishwasher: delayed start<br>${prog || 'Starts later'}.` };
     }
     // Opening the door clears it; the state alone may sit at 'finished' until then.
     const shut = (this._s(cfg.dishwasher_door) || {}).state !== 'open';

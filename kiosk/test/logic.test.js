@@ -577,6 +577,28 @@ test('hero temperatures show one decimal; a frozen air con reading falls back to
   assert.ok(w.html().includes('>25.5&#176;</span>'), 'no room number: keep the stale reading rather than a dash');
 });
 
+test('dishwasher: a delayed start shows when it finishes after the delay, not set time plus length', async () => {
+  const cfg = { dishwasher: 'sensor.dw', dishwasher_programme: 'select.dw', dishwasher_finish: 'sensor.dw_fin', dishwasher_delay: 'number.dw_delay' };
+  const at = (h, m) => new RealDate(2026, 9, 2, h, m);
+  // Real 2026-10-14 hold: set 18:45 for a 4 h delay; Home Connect reported finish 20:05 (set time + 80 min) and kept it all evening.
+  const states = {
+    'sensor.dw': { state: 'delayedstart', last_changed: at(18, 45).toISOString(), attributes: {} },
+    'select.dw': { state: 'dishcare_dishwasher_program_eco_50', last_changed: at(18, 45).toISOString(), attributes: {} },
+    'sensor.dw_fin': { state: at(20, 5).toISOString(), last_changed: at(18, 45).toISOString(), attributes: {} },
+    'number.dw_delay': { state: '12000', attributes: {} },
+  };
+  const w = world({ time: [2026, 9, 2, 19, 25], states, config: cfg });
+  assert.ok(w.html().includes('Dishwasher: delayed start<br>starts 22:45, done ~00:05.'), 'start = now + delay, done = start + 80 min');
+  const bare = world({ time: [2026, 9, 2, 19, 25], states: { ...states, 'number.dw_delay': { state: 'unavailable', attributes: {} } }, config: cfg });
+  assert.ok(bare.html().includes('Dishwasher: delayed start<br>Eco 50°.') && !bare.html().includes('done'), 'no delay known: no times shown');
+  // Same night once the cycle has begun: the integration now reports the true finish.
+  const run = world({ time: [2026, 9, 2, 23, 0], states: { ...states, 'sensor.dw': { state: 'run', last_changed: at(22, 45).toISOString(), attributes: {} }, 'sensor.dw_fin': { state: at(0, 5).toISOString(), last_changed: at(22, 46).toISOString(), attributes: {} }, 'number.dw_delay': { state: 'unavailable', attributes: {} } }, config: cfg });
+  assert.ok(run.html().includes('Dishwasher: running<br>done ~00:05.') && !run.html().includes('Dishwasher done'), 'running shows the reported finish');
+  const fin = world({ time: [2026, 9, 3, 0, 20], states: { ...states, 'sensor.dw': { state: 'finished', last_changed: new RealDate(2026, 9, 3, 0, 5).toISOString(), attributes: {} }, 'select.dw': { state: 'unknown', attributes: {} }, 'sensor.dw_fin': { state: 'unavailable', attributes: {} }, 'number.dw_delay': { state: 'unavailable', attributes: {} } }, config: { ...cfg, dishwasher_door: 'sensor.dw_door' } });
+  assert.ok(fin.html().includes('Dishwasher done.<br>Empty me.'), 'done only once finished');
+  assert.ok(!w.html().includes('Dishwasher done'), 'not done while waiting');
+});
+
 (async () => {
   let failed = 0;
   for (const [name, fn] of tests) {

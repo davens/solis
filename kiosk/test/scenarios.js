@@ -31,7 +31,7 @@ window.SCENARIOS = {
     solar_power: { state: '150' }, house_load: { state: '1900' }, grid_power: { state: '0' }, battery_power: { state: '-1750' } } },
   // Home Connect missed the start event: state still 'ready', no finish time yet.
   'dish-missed': { time: '15:20', states: { dishwasher: { state: 'ready', minsAgo: 35 }, dishwasher_programme: { state: 'dishcare_dishwasher_program_eco_50', minsAgo: 1 }, dishwasher_finish: { state: 'unavailable' }, dishwasher_door: { state: 'closed' } } },
-  'dish-delayed': { time: '21:10', states: { dishwasher: { state: 'delayedstart' }, dishwasher_programme: { state: 'dishcare_dishwasher_program_auto_2' }, dishwasher_finish: { atMins: 600 }, dishwasher_door: { state: 'closed' } } },
+  'dish-delayed': { time: '21:10', states: { dishwasher: { state: 'delayedstart' }, dishwasher_programme: { state: 'dishcare_dishwasher_program_auto_2' }, dishwasher_finish: { atMins: 60, minsAgo: 20 }, dishwasher_delay: { state: '13200' }, dishwasher_door: { state: 'closed' } } },
   'dish-done': { time: '20:05', states: { dishwasher: { state: 'finished', minsAgo: 18 }, dishwasher_programme: { state: 'unknown' }, dishwasher_finish: { state: 'unavailable' }, dishwasher_door: { state: 'closed' } } },
   // Under the garage band, the tightest left column.
   'dish-garage': { time: '18:40', states: { garage: { state: 'on', minsAgo: 6 }, dishwasher: { state: 'run' }, dishwasher_programme: { state: 'dishcare_dishwasher_program_intensiv_70' }, dishwasher_finish: { atMins: 135 }, dishwasher_door: { state: 'closed' },
