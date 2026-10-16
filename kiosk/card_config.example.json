@@ -9,6 +9,7 @@
   "evening_gap": "sensor.energy_ping_evening_gap",
   "low_power": "binary_sensor.energy_ping_low_power",
   "ping_morning": "input_datetime.energy_ping_last",
+  "day_tight": "binary_sensor.energy_day_tight",
   "solar_power": "sensor.<inverter>_solar_power",
   "house_load": "sensor.<inverter>_house_load",
   "grid_power": "sensor.<inverter>_grid_power",

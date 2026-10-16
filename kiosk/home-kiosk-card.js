@@ -13,6 +13,7 @@
 //   evening_gap: sensor.energy_ping_evening_gap   > 0 means the battery will not last to 23:30; shown as kWh short
 //   low_power: binary_sensor.energy_ping_low_power   evening_gap held above 0 for 7.5 min (the phone ping waits 15)
 //   ping_morning: input_datetime.energy_ping_last  when the 09:00 phone ping last went out
+//   day_tight: binary_sensor.energy_day_tight      the 09:00 ping's own test, live; its "off" clears the low-energy line
 //   solar_power: sensor.<inverter>_solar_power    W
 //   house_load: sensor.<inverter>_house_load      W
 //   grid_power: sensor.<inverter>_grid_power      W, positive = importing
@@ -322,6 +323,13 @@ class HomeKioskCard extends HTMLElement {
     if (today && m >= 9 * 60 && m < 17 * 60) {
       if (mon >= 3 && mon <= 9) {
         return { color: C.green, text: 'Good sunny day.<br>Earlier the better.' };
+      }
+      // The ping's test re-run live: once the numbers say the day is fine (a sunnier day than
+      // forecast, a corrected setting) the line clears itself. Only an explicit "off" clears it,
+      // so a missing reading never hides a warning that went out.
+      const tight = this._s(this._cfg.day_tight);
+      if (tight && tight.state === 'off') {
+        return { color: C.green, text: '' };
       }
       return { color: C.caution, text: 'Low energy day.<br>Be careful with power.' };
     }

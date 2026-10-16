@@ -457,6 +457,20 @@ test('battery line: says what the phone pings said today, silent otherwise', asy
   assert.strictEqual(line(w), '', 'cheap rate ends at 05:30');
 });
 
+test('battery line: the low-energy line follows the live tight test once the ping went out', async () => {
+  const cfg = Object.assign({ day_tight: 'binary_sensor.dt' }, PWR);
+  const dt = state => ({ 'binary_sensor.dt': { state, attributes: {} } });
+  const w = world({ config: cfg, states: pwr(60, Object.assign(pinged(10), dt('on'))) });
+  on(w, 10, 11, 0);
+  assert.strictEqual(line(w), 'Low energy day.<br>Be careful with power.', 'pinged and still tight');
+  w.update(pwr(60, Object.assign(pinged(10), dt('off')))); on(w, 10, 11, 0);
+  assert.strictEqual(line(w), '', 'pinged but no longer tight clears itself');
+  w.update(pwr(60, Object.assign(pinged(10), dt('unavailable')))); on(w, 10, 11, 0);
+  assert.strictEqual(line(w), 'Low energy day.<br>Be careful with power.', 'a missing reading never hides it');
+  w.update(pwr(60, dt('on'))); on(w, 10, 11, 0);
+  assert.strictEqual(line(w), '', 'tight without a ping today shows nothing');
+});
+
 test('battery flow: arrow only beyond 200 W, up and green when charging', async () => {
   const w = world({ config: { battery: 'sensor.soc', battery_power: 'sensor.bp' }, states: { 'sensor.soc': { state: '60', attributes: {} }, 'sensor.bp': { state: '150', attributes: {} } } });
   w.card._render(true);
