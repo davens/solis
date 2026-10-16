@@ -1,4 +1,4 @@
-"""Edge cases and bad data for flows.decompose() -- the v2 fifteen-flow law.
+"""Edge cases and bad data for flows.decompose() -- the v2 eighteen-flow law.
 
 These sensors will run as Home Assistant template sensors reading six live
 entities off the solis_solarman integration, plus the Tesla charger template
@@ -8,7 +8,7 @@ the input domain of decompose() is "anything HA can put in a Jinja variable",
 not "six floats".
 
 The air-con channel is the one whose bad-input surface is worth extra
-suspicion: it is not a live power sensor at all but a derivative of an hourly
+suspicion: it is not a live power sensor at all but a held average from an hourly
 counter, so it can be absent, stale by up to an hour, or briefly negative
 across a counter rebase. Absent must raise; negative must clamp. Both are
 asserted below.
@@ -46,8 +46,8 @@ remaining sink draws the same source mix. Three consequences drive the rewrite:
      helper -- solar / ETA_FLOOR -- has no v2 meaning. The replacement bound is
      tighter and physical: on a self-consistent sample solar spends EXACTLY its
      reading. See test_a_consistent_sample_spends_each_source_exactly.
-  2. There are two device inputs (tesla, aircon) and a fifth sink (Inverter),
-     so the flow count is fifteen, not six. The Tesla is carved out of the
+  2. There are three device inputs (tesla, aircon, fridge) and a fifth sink (Inverter),
+     so the flow count is eighteen, not six. The Tesla is carved out of the
      house load first and the air con out of what the Tesla left, which is why
      T is blind to the air-con reading but A is not blind to the Tesla's.
   3. Energy arriving with nowhere to go now lands on the named Inverter node
@@ -86,7 +86,7 @@ U32_TRUE_VALUE = -43.0       # what 4294967253 actually means as s32
 HA_BAD_STATES = ["unavailable", "unknown", "", "None", "   ", "\n"]
 
 # Position names, so a parametrised failure says which register broke.
-ARGS = ("solar", "battery", "grid", "house", "tesla", "aircon")
+ARGS = ("solar", "battery", "grid", "house", "tesla", "aircon", "fridge")
 
 # A ~1 kW hall-and-landing LG split unit, the size this site actually runs.
 AIRCON_W = 1000.0
@@ -95,9 +95,9 @@ AIRCON_W = 1000.0
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def flows(solar, battery, grid, house, tesla=0.0, aircon=0.0):
+def flows(solar, battery, grid, house, tesla=0.0, aircon=0.0, fridge=0.0):
     """decompose() with the contract's own key check applied."""
-    out = decompose(solar, battery, grid, house, tesla, aircon)
+    out = decompose(solar, battery, grid, house, tesla, aircon, fridge)
     assert set(out) == set(FLOWS), f"unexpected keys: {sorted(out)}"
     return out
 
@@ -151,7 +151,7 @@ def inverter_in(out):
 
 
 def total_spent_law(r):
-    """What the fifteen flows MUST sum to, from the readings alone.
+    """What the eighteen flows MUST sum to, from the readings alone.
 
     Derived from BRIEF_V2.md section 2 and verified against flows.py over
     300 000 random samples (worst absolute error 5.5e-12 W). Three mechanisms,
@@ -169,17 +169,17 @@ def total_spent_law(r):
     prove nothing.
     """
     supply = r["solar"] + r["discharge"] + r["imp"]
-    drawn = (r["house_rest"] + r["tesla"] + r["aircon"] + r["charge"]
+    drawn = (r["house_rest"] + r["tesla"] + r["aircon"] + r["fridge"] + r["charge"]
              + r["exp"])
     loss = max(0.0, supply - drawn)
     s2e = min(r["solar"], r["exp"])
     if (r["solar"] - s2e) + r["discharge"] + r["imp"] <= 0.0:
         return s2e
-    return (s2e + r["house_rest"] + r["tesla"] + r["aircon"] + r["charge"]
+    return (s2e + r["house_rest"] + r["tesla"] + r["aircon"] + r["fridge"] + r["charge"]
             + loss)
 
 
-def spends_sources_exactly(solar, battery, grid, house, tesla=0.0, aircon=0.0):
+def spends_sources_exactly(solar, battery, grid, house, tesla=0.0, aircon=0.0, fridge=0.0):
     """True when every source's outbound flows sum to exactly its own reading.
 
     TWO conditions, and getting this wrong is easy -- an earlier draft of this
@@ -197,26 +197,26 @@ def spends_sources_exactly(solar, battery, grid, house, tesla=0.0, aircon=0.0):
                         uniform random inputs it is common, which is why the
                         predicate has to say so.
     """
-    r = readings(solar, battery, grid, house, tesla, aircon)
+    r = readings(solar, battery, grid, house, tesla, aircon, fridge)
     supply = r["solar"] + r["discharge"] + r["imp"]
-    drawn = (r["house_rest"] + r["tesla"] + r["aircon"] + r["charge"]
+    drawn = (r["house_rest"] + r["tesla"] + r["aircon"] + r["fridge"] + r["charge"]
              + r["exp"])
     return supply >= drawn and r["exp"] <= r["solar"]
 
 
-def supply_exceeds_draw(solar, battery, grid, house, tesla=0.0, aircon=0.0):
+def supply_exceeds_draw(solar, battery, grid, house, tesla=0.0, aircon=0.0, fridge=0.0):
     """True when the Inverter clamp is idle, i.e. L is the real residual."""
-    r = readings(solar, battery, grid, house, tesla, aircon)
+    r = readings(solar, battery, grid, house, tesla, aircon, fridge)
     supply = r["solar"] + r["discharge"] + r["imp"]
-    drawn = (r["house_rest"] + r["tesla"] + r["aircon"] + r["charge"]
+    drawn = (r["house_rest"] + r["tesla"] + r["aircon"] + r["fridge"] + r["charge"]
              + r["exp"])
     return supply >= drawn
 
 
 def bad_in_each_position(value):
     """Yield the six argument tuples with `value` in one slot, sane elsewhere."""
-    sane = [1000.0, -500.0, 200.0, 1700.0, 0.0, 0.0]
-    for i in range(6):
+    sane = [1000.0, -500.0, 200.0, 1700.0, 0.0, 0.0, 0.0]
+    for i in range(7):
         args = list(sane)
         args[i] = value
         yield i, tuple(args)
@@ -240,10 +240,10 @@ def test_none_raises_in_every_position():
             decompose(*args)
 
 
-def test_all_six_unavailable_raises():
+def test_all_seven_unavailable_raises():
     """Logger contention (_queue.Empty) takes every entity down at once."""
     with pytest.raises((ValueError, TypeError)):
-        decompose(*(["unavailable"] * 6))
+        decompose(*(["unavailable"] * 7))
 
 
 def test_container_input_raises_type_error():
@@ -288,7 +288,7 @@ def test_scientific_notation_string():
     assert flows("3e3", "0", "0", "3e3", "0") == flows(3000.0, 0.0, 0.0, 3000.0, 0.0)
 
 
-@pytest.mark.parametrize("position", range(6))
+@pytest.mark.parametrize("position", range(7))
 def test_bool_is_rejected_in_every_position(position):
     """bool is an int subclass, so an unguarded float(True) is a silent 1 W.
 
@@ -298,7 +298,7 @@ def test_bool_is_rejected_in_every_position(position):
     would let a bool inject 1 W through whichever register was missed. This is
     parametrised over all six for exactly that reason.
     """
-    args = [0.0] * 6
+    args = [0.0] * 7
     args[position] = True
     with pytest.raises((ValueError, TypeError)):
         decompose(*args)
@@ -341,11 +341,11 @@ def test_bad_reading_is_both_a_value_error_and_a_type_error():
 # ===========================================================================
 # 2. Numeric pathologies
 # ===========================================================================
-@pytest.mark.parametrize("position", range(6))
+@pytest.mark.parametrize("position", range(7))
 def test_nan_in_any_position_is_not_silently_zeroed(position):
     """NaN in ANY position must not decompose like 0.0 in that position -- a
     broken sensor must not be indistinguishable from an idle one."""
-    args = [3000.0, -1000.0, 500.0, 4500.0, 0.0, 0.0]
+    args = [3000.0, -1000.0, 500.0, 4500.0, 0.0, 0.0, 0.0]
     args[position] = float("nan")
     with pytest.raises((ValueError, TypeError)):
         decompose(*args)
@@ -379,10 +379,10 @@ def test_u32_misread_is_rejected_as_implausible():
         decompose(0.0, 0.0, U32_MISREAD, 500.0, 0.0, 0.0)
 
 
-@pytest.mark.parametrize("position", range(6))
+@pytest.mark.parametrize("position", range(7))
 def test_u32_misread_is_rejected_in_every_position(position):
     """The misread can land on any of the six registers, not just the meter."""
-    args = [0.0, 0.0, 0.0, 500.0, 0.0, 0.0]
+    args = [0.0, 0.0, 0.0, 500.0, 0.0, 0.0, 0.0]
     args[position] = U32_MISREAD
     with pytest.raises((ValueError, TypeError)):
         decompose(*args)
@@ -749,10 +749,10 @@ def test_a_seven_kilowatt_tesla_slot_is_not_confused_with_the_house_battery():
 #
 # Unlike every other channel this one is not a power sensor. The LG ThinQ
 # integration publishes no power entity at all, only an hourly energy counter,
-# so the channel is that counter's derivative: one value held for a whole hour,
+# so the channel is that counter's held average: one value held for a whole hour,
 # describing the hour that has just finished. Three consequences are tested
 # here -- it can be absent, it can disagree badly with the 10 s house poll, and
-# a counter rebase can make it briefly negative.
+# a negative numeric input must clamp safely even though the template handles resets.
 # ===========================================================================
 def test_aircon_is_carved_out_of_the_house_after_the_tesla():
     """BRIEF_V2 section 9: T first, then A out of what T left, then Hr.
@@ -825,10 +825,11 @@ def test_aircon_unavailable_raises_rather_than_assuming_zero(bad):
 
 
 def test_negative_aircon_is_clamped_not_rejected():
-    """The channel is a derivative of a cumulative counter, and CLAUDE.md
-    records the gas equivalent of that counter re-basing five times, once by
-    -20220 kWh in a single hour. A negative derivative is a measurement about a
-    counter, not a missing reading, so it clamps rather than raising."""
+    """A negative numeric optional reading clamps safely to zero.
+
+    The trigger-based template handles daily resets itself; this regression
+    still protects the decomposition against any negative numeric input.
+    """
     out = flows(0.0, 0.0, 1000.0, 1000.0, 0.0, -50.0)
     assert aircon_in(out) == 0.0
     assert out["grid_to_house"] == pytest.approx(1000.0)
@@ -990,7 +991,7 @@ def test_inverter_loss_matches_the_briefs_formula_exactly():
                 rng.uniform(0.0, 7000.0), rng.uniform(0.0, 3000.0))
         r = readings(*args)
         want = max(0.0, (r["solar"] + r["discharge"] + r["imp"])
-                   - (r["house_rest"] + r["tesla"] + r["aircon"] + r["charge"]
+                   - (r["house_rest"] + r["tesla"] + r["aircon"] + r["fridge"] + r["charge"]
                       + r["exp"]))
         assert inverter_loss(r) == pytest.approx(want, rel=1e-12, abs=1e-9)
         assert inverter_in(flows(*args)) == pytest.approx(want, rel=1e-9, abs=1e-9)
@@ -1036,10 +1037,11 @@ def test_a_consistent_sample_spends_each_source_exactly():
         house = rng.uniform(0.0, 6000.0)
         tesla = rng.uniform(0.0, house)
         aircon = rng.uniform(0.0, house)
-        if not spends_sources_exactly(solar, battery, grid, house, tesla, aircon):
+        fridge = rng.uniform(0.0, house)
+        if not spends_sources_exactly(solar, battery, grid, house, tesla, aircon, fridge):
             continue
-        r = readings(solar, battery, grid, house, tesla, aircon)
-        out = flows(solar, battery, grid, house, tesla, aircon)
+        r = readings(solar, battery, grid, house, tesla, aircon, fridge)
+        out = flows(solar, battery, grid, house, tesla, aircon, fridge)
         assert solar_out(out) == pytest.approx(r["solar"], rel=1e-9, abs=1e-9)
         assert battery_out(out) == pytest.approx(r["discharge"], rel=1e-9, abs=1e-9)
         assert grid_out(out) == pytest.approx(r["imp"], rel=1e-9, abs=1e-9)
@@ -1061,8 +1063,9 @@ def test_every_sink_fills_exactly_regardless_of_consistency():
         house = rng.uniform(0.0, 9000.0)
         tesla = rng.uniform(0.0, 7000.0)
         aircon = rng.uniform(0.0, 3000.0)
-        r = readings(solar, battery, grid, house, tesla, aircon)
-        out = flows(solar, battery, grid, house, tesla, aircon)
+        fridge = rng.uniform(0.0, 500.0)
+        r = readings(solar, battery, grid, house, tesla, aircon, fridge)
+        out = flows(solar, battery, grid, house, tesla, aircon, fridge)
         s2e = min(r["solar"], r["exp"])
         if (r["solar"] - s2e) + r["discharge"] + r["imp"] <= 0.0:
             # The division guard: no source is left to attribute anything to, so
@@ -1073,6 +1076,7 @@ def test_every_sink_fills_exactly_regardless_of_consistency():
         assert house_in(out) == pytest.approx(r["house_rest"], rel=1e-9, abs=1e-9)
         assert tesla_in(out) == pytest.approx(r["tesla"], rel=1e-9, abs=1e-9)
         assert aircon_in(out) == pytest.approx(r["aircon"], rel=1e-9, abs=1e-9)
+        assert filled(out, "fridge") == pytest.approx(r["fridge"], rel=1e-9, abs=1e-9)
         assert battery_in(out) == pytest.approx(r["charge"], rel=1e-9, abs=1e-9)
         assert out["solar_to_export"] == pytest.approx(min(r["solar"], r["exp"]),
                                                        rel=1e-9, abs=1e-9)
@@ -1389,7 +1393,7 @@ def test_repeated_decomposition_does_not_drift():
 
     Tolerance: relative error < 1e-12 per flow. Anything larger would be
     visible in a kWh total after a day of 10 s polling -- and v2 integrates
-    fifteen of these, not six.
+    eighteen of these, not six.
     """
     n = 10_000
     args = (2982.1, -1063.3, 200.7, 4045.9, 0.0)
@@ -1411,7 +1415,7 @@ def test_the_total_credited_matches_the_law_on_every_random_sample():
 
     v1 needed a soft ETA_FLOOR headroom bound here, because solar absorbed a
     fitted residual and no exact statement was available. v2 has one: the
-    fifteen flows sum to `total_spent_law(r)` -- derived from the brief, recomputed here
+    eighteen flows sum to `total_spent_law(r)` -- derived from the brief, recomputed here
     from the readings alone -- on every input, with no tolerance band and no
     fitted constant anywhere in it.
 

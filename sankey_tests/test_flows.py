@@ -1,4 +1,4 @@
-"""Tests for flows.py -- the Sankey v2 fifteen-flow decomposition.
+"""Tests for flows.py -- the Sankey v2 eighteen-flow decomposition.
 
 Run:
 
@@ -98,17 +98,9 @@ import replay as rp  # noqa: E402
 def load_day(day):
     """v2-suite's loader, plus the two sidecar extras I need.
 
-    THE AIR-CON CHANNEL IS NOT IN THESE FIXTURES. fixtures/replay.py feeds
-    decompose() a constant aircon = 0.0 for every sample, because the four
-    recorded days pre-date the air-con channel entirely. Everything replayed
-    below is therefore a five-channel measurement, and the House node it
-    produces is "house excluding the car" rather than "house excluding the car
-    and the air con" -- which is exactly what
-    sensor.house_load_excluding_car measures, so
-    test_house_node_matches_has_own_house_excluding_car_template still faces the
-    right quantity. If an air-con series is ever added to these fixtures, the
-    House node will shrink by it and that reconciliation has to be re-aimed at a
-    template that also excludes the air con.
+    Air con and Fridge are both blind in these recorded captures. Replay holds
+    both at zero for arithmetic and refuses their individual quantities; only
+    House + Air con + Fridge is the measured house load excluding the car.
     """
     doc = rp.load_day(day, tesla=True)
     doc["tesla_counter"] = doc["tesla_counters"]["tesla_home_charging_energy"]
@@ -162,8 +154,8 @@ def replay_day(day):
     # the refusal is the other half and it belongs here, at the reporting
     # boundary, so the ten quantities the Tesla channel provably cannot reach
     # survive on 2026-08-27.
-    r["blind_channels"] = (frozenset(["tesla"]) if r["tesla_assumed_s"] > 0.0
-                           else frozenset())
+    r["blind_channels"] = rp.blind_channels(doc) | (
+        {"tesla"} if r["tesla_assumed_s"] > 0.0 else set())
     r["unsourced_export"], r["unsourced_samples"] = unsourced_export(doc, end)
     r["tesla_counter"] = doc["tesla_counter"]
     r["house_excl_car"] = doc["house_excl_car"]
@@ -227,18 +219,18 @@ def reportable(r):
 # --------------------------------------------------------------------------
 
 EXPECTED_FLOWS = {
-    "solar_to_house", "solar_to_tesla", "solar_to_aircon", "solar_to_battery",
+    "solar_to_house", "solar_to_tesla", "solar_to_aircon", "solar_to_fridge", "solar_to_battery",
     "solar_to_export", "solar_to_inverter",
-    "battery_to_house", "battery_to_tesla", "battery_to_aircon",
+    "battery_to_house", "battery_to_tesla", "battery_to_aircon", "battery_to_fridge",
     "battery_to_inverter",
-    "grid_to_house", "grid_to_tesla", "grid_to_aircon", "grid_to_battery",
+    "grid_to_house", "grid_to_tesla", "grid_to_aircon", "grid_to_fridge", "grid_to_battery",
     "grid_to_inverter",
 }
 
 
-def test_flow_keys_are_exactly_the_fifteen_links():
+def test_flow_keys_are_exactly_the_eighteen_links():
     assert set(flows.FLOWS) == EXPECTED_FLOWS
-    assert len(flows.FLOWS) == 15
+    assert len(flows.FLOWS) == 18
 
 
 @pytest.mark.parametrize("forbidden", [
@@ -392,7 +384,7 @@ def test_aircon_is_carved_out_after_the_tesla():
     """Order is load-bearing: T first, then A out of what T left.
 
     The two channels come from completely different places -- TeslaMate's
-    on-change power and the LG hourly energy counter's derivative -- so nothing
+    on-change power and the LG hourly energy counter's held average -- so nothing
     stops them summing past the house load. Carving the Tesla first is what
     makes T blind to the air-con reading, which is the property flows.DEPENDS_ON
     relies on to keep the Tesla figures on days the air-con channel is blind.
@@ -453,8 +445,8 @@ def test_aircon_larger_than_the_house_load_fabricates_nothing():
 
 
 def test_negative_aircon_is_clamped_not_rejected():
-    """The channel is a derivative of an hourly energy counter, so a rebase can
-    briefly make it negative. That is a measurement, not a non-reading."""
+    """The template handles daily resets, but a negative numeric input must
+    still clamp safely to zero rather than become a non-reading."""
     f = decompose(0, 0, 1000, 1000, 0, -50)
     assert node_totals(f)["aircon"] == 0.0
     assert f["grid_to_house"] == pytest.approx(1000.0)
@@ -491,16 +483,16 @@ def test_tesla_reading_cannot_move_any_non_tesla_flow():
 
     T only ever splits the house sink. Hr + T == house for every T, the shares
     depend on S1/B/G alone, and L depends on Hr + T rather than on either part.
-    So nine of the fifteen flows -- and each source's to_house + to_tesla sum --
+    So twelve of the eighteen flows with both appliance readings held at zero -- and each source's to_house + to_tesla sum --
     are provably blind to the Tesla reading. A day whose Tesla channel does not
     exist yet therefore loses ONLY the House/Tesla split, and keeps solar,
     export, battery, grid and the Inverter node intact.
 
-    This is why the replay integrates 2026-08-27 with T = 0 for those nine and
+    This is why the replay integrates 2026-08-27 with T = 0 for the T-invariant quantities and
     returns None for everything downstream of the split, rather than discarding
     the day.
 
-    AIR CON IS HELD AT ZERO HERE ON PURPOSE, and the invariant is false without
+    AIR CON AND FRIDGE ARE HELD AT ZERO HERE ON PURPOSE, and the invariant is false without
     that: A = min(aircon, house - T), so with a non-zero air-con reading moving
     T squeezes A and the three air-con ribbons move with it. That is exactly
     what flows.DEPENDS_ON declares -- the air-con flows list `tesla` among their
@@ -542,9 +534,9 @@ def test_tesla_clamp_matters_on_a_stale_plateau():
     float("nan"), float("inf"), float("-inf"),
     1e6, -1e6, 100_000.01,
 ])
-@pytest.mark.parametrize("slot", range(6))
+@pytest.mark.parametrize("slot", range(7))
 def test_bad_reading_in_any_slot_raises(bad, slot):
-    args = [1000.0, -100.0, 50.0, 900.0, 0.0, 0.0]
+    args = [1000.0, -100.0, 50.0, 900.0, 0.0, 0.0, 0.0]
     args[slot] = bad
     with pytest.raises(BadReading):
         decompose(*args)
@@ -592,7 +584,7 @@ def test_the_plausibility_ceiling_boundary_is_inclusive():
 
 def test_bad_reading_names_the_offending_channel():
     for slot, name in enumerate(flows.CHANNELS):
-        args = [0, 0, 0, 0, 0, 0]
+        args = [0] * len(flows.CHANNELS)
         args[slot] = "unavailable"
         with pytest.raises(BadReading) as e:
             decompose(*args)
@@ -773,7 +765,7 @@ def test_inverter_loss_excludes_aircon_double_counting():
     """house already contains the air con too, so Hr + T + A is just `house`.
 
     Counting A on top of the house reading would invent 900 W of loss out of an
-    hourly-counter derivative -- and the air-con channel is the one most likely
+    hourly-counter template -- and the air-con channel is the one most likely
     to disagree with the 10 s house poll, because it holds one value for a whole
     hour.
     """
@@ -839,8 +831,8 @@ def test_no_bad_input_can_raise_a_structure_error():
     guards, not a structural failure -- so it must raise BadReading first."""
     for bad in (None, "", "unavailable", "unknown", [], True, False,
                 float("nan"), float("inf"), 1e9, -1e9, "abc"):
-        for slot in range(6):
-            args = [1000.0, -100.0, 50.0, 900.0, 10.0, 10.0]
+        for slot in range(7):
+            args = [1000.0, -100.0, 50.0, 900.0, 10.0, 10.0, 10.0]
             args[slot] = bad
             with pytest.raises(BadReading):
                 decompose(*args)
@@ -895,7 +887,7 @@ def test_check_structure_rejects_simultaneous_import_and_export():
 
 
 @pytest.mark.parametrize("link", ["battery_to_house", "battery_to_tesla",
-                                  "battery_to_aircon", "battery_to_inverter"])
+                                  "battery_to_aircon", "battery_to_fridge", "battery_to_inverter"])
 def test_check_structure_rejects_a_charging_battery_used_as_a_source(link):
     """Parametrised over all four battery-outbound links.
 
@@ -1014,7 +1006,7 @@ def test_band_table_rows_never_degenerate_to_zero_while_supply_exists():
     """
     assert 5e-324 * 0.22 == 0.0, "the underflow this test is about"
     assert set(flows._band_table(0.0, 5e-324, 0.0)) == {
-        "house_rest", "tesla", "aircon", "charge", "loss"}
+        "house_rest", "tesla", "aircon", "fridge", "charge", "loss"}
     for row in flows._band_table(0.0, 5e-324, 0.0).values():
         assert row == (0.0, 1.0, 0.0)
 
@@ -1242,17 +1234,16 @@ if given is not None:
         flows.set_loss_rule("proportional")
 
     @settings(max_examples=300, suppress_health_check=[HealthCheck.too_slow])
-    @given(POS, W, W, POS, POS, POS)
-    def test_property_energy_is_conserved_across_the_cut(s, b, g, h, t, a):
+    @given(POS, W, W, POS, POS, POS, POS)
+    def test_property_energy_is_conserved_across_the_cut(s, b, g, h, t, a, fr):
         """Everything the sources are credited with spending equals everything
         the sinks are credited with receiving. This holds on EVERY sample,
         including the inconsistent ones -- unlike per-source exactness, which
         does not (see test_sources_overspend_when_the_residual_clamps)."""
-        r = readings(s, b, g, h, t, a)
-        f = decompose(s, b, g, h, t, a)
+        f = decompose(s, b, g, h, t, a, fr)
         n = node_totals(f)
         spent = n["solar_spent"] + n["battery_spent"] + n["grid_spent"]
-        received = (n["house"] + n["tesla"] + n["aircon"] + n["battery_in"]
+        received = (n["house"] + n["tesla"] + n["aircon"] + n["fridge"] + n["battery_in"]
                     + n["export"] + n["inverter"])
         assert spent == pytest.approx(received, abs=1e-6)
         assert spent == pytest.approx(sum(f.values()), abs=1e-6)
@@ -1416,7 +1407,7 @@ def test_a_tesla_blind_day_refuses_exactly_the_tesla_dependent_quantities(replay
     to protect two figures; reporting zeroes would fabricate them. This is the
     third option, and it is only safe because the map is verified."""
     r = replays["2026-08-27"]
-    assert r["blind_channels"] == frozenset(["tesla"])
+    assert r["blind_channels"] == frozenset(["tesla", "aircon", "fridge"])
     assert r["tesla_assumed_s"] > 40_000
     rep = reportable(r)
 
@@ -1425,12 +1416,12 @@ def test_a_tesla_blind_day_refuses_exactly_the_tesla_dependent_quantities(replay
     # air-con split unknowable as well. flows.DEPENDS_ON says so, and this list
     # is checked against it by the assertion below rather than trusted.
     for q in ("house", "tesla", "aircon", "solar_to_house", "solar_to_tesla",
-              "solar_to_aircon", "battery_to_house", "battery_to_tesla",
-              "battery_to_aircon", "grid_to_house", "grid_to_tesla",
+              "solar_to_aircon", "solar_to_fridge", "battery_to_house", "battery_to_tesla",
+              "battery_to_aircon", "battery_to_fridge", "grid_to_house", "grid_to_tesla",
               "grid_to_aircon"):
         assert rep[q] is None, q
     assert {q for q, v in rep.items() if v is None} == \
-        flows.unreportable(["tesla"])
+        flows.unreportable(["tesla", "aircon", "fridge"])
     # ...and everything the Tesla channel provably cannot reach survives.
     for q in ("solar_spent", "battery_spent", "grid_spent", "inverter",
               "export", "battery_in", "solar_to_battery", "grid_to_battery",
@@ -1439,8 +1430,9 @@ def test_a_tesla_blind_day_refuses_exactly_the_tesla_dependent_quantities(replay
         assert rep[q] is not None and rep[q] >= 0.0, q
 
     for day in TESLA_DAYS:
-        assert replays[day]["blind_channels"] == frozenset()
-        assert all(v is not None for v in reportable(replays[day]).values())
+        assert replays[day]["blind_channels"] == frozenset(["aircon", "fridge"])
+        rep = reportable(replays[day])
+        assert {q for q, v in rep.items() if v is None} == flows.unreportable(["aircon", "fridge"])
 
 
 def test_dependency_map_is_complete_and_minimal():
@@ -1465,12 +1457,12 @@ def test_dependency_map_is_complete_and_minimal():
     for _ in range(400):
         base = [rng.uniform(0, 7000), rng.uniform(-5000, 5000),
                 rng.uniform(-6000, 6000), rng.uniform(0, 9000),
-                rng.uniform(0, 9000), rng.uniform(0, 4000)]
+                rng.uniform(0, 9000), rng.uniform(0, 4000), rng.uniform(0, 1000)]
         b = quantities(base)
         for i, channel in enumerate(flows.CHANNELS):
             alt = list(base)
             alt[i] = (rng.uniform(0, 7000)
-                      if channel in ("solar", "house", "tesla", "aircon")
+                      if channel in ("solar", "house", "tesla", "aircon", "fridge")
                       else rng.uniform(-6000, 6000))
             a = quantities(alt)
             for q in flows.DEPENDS_ON:

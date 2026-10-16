@@ -46,7 +46,7 @@ EXACT is only true in one regime.** Proof sketch, worth reading before touching
 a tolerance:
 
     if E <= S and (S+B+G) >= (Hr+T+A+C+E), then L is not clamped and
-        Hr + T + A + C + L = S + B + G - E = S1 + B + G = den
+        Hr + T + A + F + C + L = S + B + G - E = S1 + B + G = den
     so each source's outbound sum is exactly its own reading, and each sink is
     exactly filled. Two regimes break it, in opposite and unequal ways:
 
@@ -141,24 +141,24 @@ SOURCES = ("solar", "battery", "grid")
 KEYS = (
     "solar_to_house",
     "solar_to_tesla",
-    "solar_to_aircon",
+    "solar_to_aircon", "solar_to_fridge",
     "solar_to_battery",
     "solar_to_export",
     "solar_to_inverter",
     "battery_to_house",
     "battery_to_tesla",
-    "battery_to_aircon",
+    "battery_to_aircon", "battery_to_fridge",
     "battery_to_inverter",
     "grid_to_house",
     "grid_to_tesla",
-    "grid_to_aircon",
+    "grid_to_aircon", "grid_to_fridge",
     "grid_to_battery",
     "grid_to_inverter",
 )
 
 # Every sink a flow may land in. Air con joined on 2026-09-11; like the other
 # five it is a TERMINUS, so nothing may leave it.
-SINKS = ("house", "tesla", "aircon", "battery", "export", "inverter")
+SINKS = ("house", "tesla", "aircon", "fridge", "battery", "export", "inverter")
 
 # Links that must not merely evaluate to zero -- they must not exist. A key that
 # is present and zero is a link somebody can later populate; an absent key is a
@@ -246,7 +246,7 @@ def _assert_close(a, b, what, rel=FP_REL, abs_=FP_ABS):
 # reference to this, so a shared misreading of the brief cannot pass silently.
 # ---------------------------------------------------------------------------
 
-def reference(solar, battery, grid, house, tesla, aircon):
+def reference(solar, battery, grid, house, tesla, aircon, fridge=0.0):
     S = max(0.0, float(solar))
     B = max(0.0, -float(battery))
     C = max(0.0, float(battery))
@@ -254,9 +254,10 @@ def reference(solar, battery, grid, house, tesla, aircon):
     E = max(0.0, -float(grid))
     H = max(0.0, float(house))
     T = min(max(0.0, float(tesla)), H)
-    A = min(max(0.0, float(aircon)), H - T)
-    Hr = H - T - A
-    L = max(0.0, (S + B + G) - (Hr + T + A + C + E))
+    F = min(max(0.0, float(fridge)), H - T)
+    A = min(max(0.0, float(aircon)), H - T - F)
+    Hr = H - T - F - A
+    L = max(0.0, (S + B + G) - (Hr + T + A + F + C + E))
 
     s2e = min(S, E)
     S1 = S - s2e
@@ -270,23 +271,26 @@ def reference(solar, battery, grid, house, tesla, aircon):
         "solar_to_house": w * Hr,
         "solar_to_tesla": w * T,
         "solar_to_aircon": w * A,
+        "solar_to_fridge": w * F,
         "solar_to_battery": w * C,
         "solar_to_export": s2e,
         "solar_to_inverter": w * L,
         "battery_to_house": b * Hr,
         "battery_to_tesla": b * T,
         "battery_to_aircon": b * A,
+        "battery_to_fridge": b * F,
         "battery_to_inverter": b * L,
         "grid_to_house": g * Hr,
         "grid_to_tesla": g * T,
         "grid_to_aircon": g * A,
+        "grid_to_fridge": g * F,
         "grid_to_battery": g * C,
         "grid_to_inverter": g * L,
     }
     return out
 
 
-def parts(solar, battery, grid, house, tesla, aircon):
+def parts(solar, battery, grid, house, tesla, aircon, fridge=0.0):
     """The intermediate quantities, for tests that need to reason about regime."""
     S = max(0.0, float(solar))
     B = max(0.0, -float(battery))
@@ -295,10 +299,11 @@ def parts(solar, battery, grid, house, tesla, aircon):
     E = max(0.0, -float(grid))
     H = max(0.0, float(house))
     T = min(max(0.0, float(tesla)), H)
-    A = min(max(0.0, float(aircon)), H - T)
-    Hr = H - T - A
-    L_raw = (S + B + G) - (Hr + T + A + C + E)
-    return dict(S=S, B=B, C=C, G=G, E=E, H=H, T=T, A=A, Hr=Hr,
+    F = min(max(0.0, float(fridge)), H - T)
+    A = min(max(0.0, float(aircon)), H - T - F)
+    Hr = H - T - F - A
+    L_raw = (S + B + G) - (Hr + T + A + F + C + E)
+    return dict(S=S, B=B, C=C, G=G, E=E, H=H, T=T, A=A, F=F, Hr=Hr,
                 L=max(0.0, L_raw), L_raw=L_raw,
                 supply=S + B + G, den=(S - min(S, E)) + B + G)
 
@@ -418,15 +423,15 @@ def consistent(draw, force_export=False, force_charge=False):
 
 @given(**BASE)
 @SETTINGS
-def test_returned_keys_are_exactly_the_fifteen(
+def test_returned_keys_are_exactly_the_eighteen(
         solar, battery, grid, house, tesla, aircon):
     assert set(decompose(solar, battery, grid, house, tesla, aircon)) == set(KEYS)
 
 
-def test_there_are_exactly_fifteen_flows():
-    assert len(KEYS) == 15
-    assert len(set(KEYS)) == 15
-    assert len(decompose(3000.0, -500.0, -200.0, 2000.0, 800.0, 400.0)) == 15
+def test_there_are_exactly_eighteen_flows():
+    assert len(KEYS) == 18
+    assert len(set(KEYS)) == 18
+    assert len(decompose(3000.0, -500.0, -200.0, 2000.0, 800.0, 400.0)) == 18
 
 
 @pytest.mark.parametrize("key", FORBIDDEN_KEYS)
@@ -533,7 +538,7 @@ def test_the_v1_nanowatt_hole_is_closed():
 
     v1: `decompose(0, 0, 0, 1e-9)` produced a non-zero solar flow because the
     over-spend trim was guarded by `over > _EPS` and 1e-9 sat on the boundary.
-    Nothing is supplying anything here, so every one of the fifteen must be
+    Nothing is supplying anything here, so every one of the eighteen must be
     literally zero.
     """
     f = decompose(0.0, 0.0, 0.0, 1e-9, 0.0, 0.0)
@@ -741,7 +746,7 @@ def test_each_individual_flow_is_bounded_by_its_own_sink(
         solar, battery, grid, house, tesla, aircon):
     p = parts(solar, battery, grid, house, tesla, aircon)
     f = decompose(solar, battery, grid, house, tesla, aircon)
-    caps = {"house": p["Hr"], "tesla": p["T"], "aircon": p["A"],
+    caps = {"house": p["Hr"], "tesla": p["T"], "aircon": p["A"], "fridge": p["F"],
             "battery": p["C"], "export": p["E"], "inverter": p["L"]}
     for k, v in f.items():
         cap = caps[k.split("_to_")[1]]
@@ -867,7 +872,7 @@ def test_battery_and_grid_are_interchangeable_sources(x, y, solar, house, tesla,
                       "battery/grid swap on %s" % sink)
         _assert_close(a["grid_to_%s" % sink], b["battery_to_%s" % sink],
                       "grid/battery swap on %s" % sink)
-    for k in ("solar_to_house", "solar_to_tesla", "solar_to_aircon",
+    for k in ("solar_to_house", "solar_to_tesla", "solar_to_aircon", "solar_to_fridge",
               "solar_to_battery", "solar_to_export", "solar_to_inverter"):
         _assert_close(a[k], b[k], "solar unchanged: %s" % k)
 
@@ -913,7 +918,7 @@ def test_house_and_tesla_are_interchangeable_sinks(
                       "house/tesla swap from %s" % src)
         _assert_close(a["%s_to_tesla" % src], b["%s_to_house" % src],
                       "tesla/house swap from %s" % src)
-    for k in ("solar_to_aircon", "battery_to_aircon", "grid_to_aircon",
+    for k in ("solar_to_aircon", "solar_to_fridge", "battery_to_aircon", "battery_to_fridge", "grid_to_aircon", "grid_to_fridge",
               "solar_to_export", "solar_to_battery", "grid_to_battery",
               "solar_to_inverter", "battery_to_inverter", "grid_to_inverter"):
         _assert_close(a[k], b[k], "unchanged: %s" % k)
@@ -996,7 +1001,7 @@ def test_tesla_above_house_load_is_clamped_and_leaves_house_at_exactly_zero(
 
     Air con is drawn as well, and the air-con assertion is the new half: T is
     taken first, so once the car alone covers the load there is nothing left for
-    A either, however large the LG counter's derivative happens to be.
+    A either, however large the LG counter's held average happens to be.
     """
     assume(over > 0.0)
     f = decompose(solar, battery, grid, house, house + over, aircon)
@@ -1119,7 +1124,7 @@ def test_the_air_con_clamp_keeps_the_rest_of_the_house_non_negative(
 @pytest.mark.parametrize("over", [1e-9, 1.0, 250.0, 9000.0])
 def test_air_con_above_what_the_tesla_left_is_absorbed_by_the_clamp(over):
     """Not fabricated flow, and not a negative House. The LG channel is a
-    derivative of an hourly energy counter describing the hour that has just
+    held average from an hourly energy counter describing the hour that has just
     finished, so it lags the 10 s house_load by up to an hour and WILL out-read
     what is left on some samples. Air con gets exactly `house - tesla`, House
     gets exactly zero, and nothing appears from nowhere."""
@@ -1278,7 +1283,7 @@ def test_inverter_node_equals_the_measured_residual_on_a_worked_sample():
 @given(args=consistent())
 @SETTINGS
 def test_inverter_node_closes_the_balance_exactly(args):
-    """supply - (Hr + T + A + C + E) == Inverter, with no slack anywhere."""
+    """supply - (Hr + T + A + F + C + E) == Inverter, with no slack anywhere."""
     p = parts(*args)
     assume(p["L_raw"] >= 0.0)
     f = decompose(*args)
@@ -1321,12 +1326,12 @@ BAD_VALUES = [
     "12abc",
 ]
 
-CHANNELS = ("solar", "battery", "grid", "house", "tesla", "aircon")
-GOOD = (3000.0, -500.0, 1000.0, 2500.0, 800.0, 600.0)
+CHANNELS = ("solar", "battery", "grid", "house", "tesla", "aircon", "fridge")
+GOOD = (3000.0, -500.0, 1000.0, 2500.0, 800.0, 600.0, 100.0)
 
 
 @pytest.mark.parametrize("bad", BAD_VALUES, ids=lambda v: repr(v)[:24])
-@pytest.mark.parametrize("idx", range(6), ids=CHANNELS)
+@pytest.mark.parametrize("idx", range(7), ids=CHANNELS)
 def test_an_unusable_reading_raises_on_every_channel(idx, bad):
     """Raising rather than substituting 0.0 is the whole point. The dominant
     failure mode is Modbus session contention -- one session at a time, so a
@@ -1339,7 +1344,7 @@ def test_an_unusable_reading_raises_on_every_channel(idx, bad):
         decompose(*args)
 
 
-@pytest.mark.parametrize("idx", range(6), ids=CHANNELS)
+@pytest.mark.parametrize("idx", range(7), ids=CHANNELS)
 def test_a_bool_is_not_a_measurement(idx):
     """`bool` is an `int` subclass, so an unguarded `True` decomposes as 1 W."""
     for b in (True, False):
@@ -1349,7 +1354,7 @@ def test_a_bool_is_not_a_measurement(idx):
             decompose(*args)
 
 
-@pytest.mark.parametrize("idx", range(6), ids=CHANNELS)
+@pytest.mark.parametrize("idx", range(7), ids=CHANNELS)
 def test_a_u32_sign_misread_is_rejected_not_clamped(idx):
     """CLAUDE.md records register 33257 read unsigned as 4294967253 W = 2^32-43
     when the truth was -43 W. Clamping would turn 4.29 GW of import into a
@@ -1363,7 +1368,7 @@ def test_a_u32_sign_misread_is_rejected_not_clamped(idx):
         decompose(*args)
 
 
-@pytest.mark.parametrize("idx", range(6), ids=CHANNELS)
+@pytest.mark.parametrize("idx", range(7), ids=CHANNELS)
 def test_the_plausibility_ceiling_is_a_boundary_not_a_gradient(idx):
     """Just inside must work, just outside must raise. A test that only probes
     4.29e9 cannot tell a real ceiling from `abs(v) > 1e300`."""
@@ -1407,8 +1412,8 @@ def test_a_nan_reading_is_not_silently_equal_to_an_idle_night():
         decompose(0.0, float("nan"), 0.0, 0.0, 0.0, 0.0)
 
 
-@pytest.mark.parametrize("idx", [0, 3, 4, 5],
-                         ids=["solar", "house", "tesla", "aircon"])
+@pytest.mark.parametrize("idx", [0, 3, 4, 5, 6],
+                         ids=["solar", "house", "tesla", "aircon", "fridge"])
 def test_a_negative_reading_where_none_is_possible_is_handled_without_leaking(idx):
     """solar, house, tesla and air con cannot be negative. Whatever flows.py
     chooses to do -- raise, or treat as zero -- it must not half-clamp, which
@@ -1425,7 +1430,7 @@ def test_a_negative_reading_where_none_is_possible_is_handled_without_leaking(id
         "a negative %s neither raised nor behaved as 0.0" % CHANNELS[idx])
 
 
-def test_positional_signature_is_solar_battery_grid_house_tesla_aircon():
+def test_positional_signature_is_solar_battery_grid_house_tesla_aircon_fridge():
     """Argument order is load-bearing: swapping grid and house silently produces
     a plausible chart. Pinned by samples only one ordering can explain -- solar
     5000 exporting 1000 with the house at 500, first with no car and no air con,
@@ -1442,6 +1447,11 @@ def test_positional_signature_is_solar_battery_grid_house_tesla_aircon():
     assert g["solar_to_house"] == 0.0
     assert g["solar_to_tesla"] == 0.0
     _assert_close(g["solar_to_inverter"], 3500.0, "inverter")
+
+    fridge = decompose(5000.0, 0.0, -1000.0, 500.0, 0.0, 0.0, 500.0)
+    _assert_close(fridge["solar_to_fridge"], 500.0, "fridge")
+    assert fridge["solar_to_house"] == fridge["solar_to_aircon"] == 0.0
+    _assert_close(fridge["solar_to_inverter"], 3500.0, "inverter")
 
 
 # ===========================================================================
@@ -1603,7 +1613,7 @@ def _good_pair():
     return decompose(*args), flows.readings(*args)
 
 
-def test_the_flows_constant_matches_the_fifteen_keys_the_brief_defines():
+def test_the_flows_constant_matches_the_eighteen_keys_the_brief_defines():
     """flows.FLOWS is the module's own claim about its keys. KEYS above is an
     independent literal transcribed from BRIEF_V2.md. They must agree, and
     checking that here is what stops the key tests from being circular."""
@@ -1790,7 +1800,7 @@ def test_node_totals_never_invents_or_loses_energy(solar, battery, grid, house, 
 # outputs actually move -- rather than by re-reading DEPENDS_ON.
 # ===========================================================================
 
-INPUT_CHANNELS = ("solar", "battery", "grid", "house", "tesla", "aircon")
+INPUT_CHANNELS = ("solar", "battery", "grid", "house", "tesla", "aircon", "fridge")
 
 
 def test_no_blind_channel_means_nothing_is_unreportable():
@@ -1808,7 +1818,7 @@ def test_all_channels_blind_means_nothing_can_be_reported():
     dead = flows.unreportable(INPUT_CHANNELS)
     for key in KEYS:
         assert key in dead, key
-    for node in ("house", "tesla", "aircon", "battery_in", "export",
+    for node in ("house", "tesla", "aircon", "fridge", "battery_in", "export",
                  "inverter"):
         assert node in dead, node
 
@@ -1834,7 +1844,7 @@ def test_the_declared_dependencies_cover_every_flow_that_actually_moves(channel)
     """The empirical check, and the one that matters.
 
     For each input channel, perturb it across a spread of samples and record
-    which of the fifteen flows changed. Every flow that moved MUST be listed as
+    which of the eighteen flows changed. Every flow that moved MUST be listed as
     unreportable when that channel goes blind. An under-declaration here means
     a flow sensor would keep publishing a number computed from a dead input.
     """
@@ -1855,6 +1865,7 @@ def test_the_declared_dependencies_cover_every_flow_that_actually_moves(channel)
     moved = set()
     idx = INPUT_CHANNELS.index(channel)
     for base in samples:
+        base = (*base, 100.0)
         a = decompose(*base)
         for delta in (+250.0, -250.0, +37.5):
             probe = list(base)
@@ -1929,10 +1940,7 @@ def test_the_tesla_flows_are_genuinely_blind_to_the_air_con_reading():
 
 
 def test_exactly_six_flows_declare_a_dependency_on_the_aircon_channel():
-    """The minimality half, for the sixth channel. Air con can only move the
-    three `*_to_house` flows (it is taken out of Hr) and its own three. If it
-    ever acquired a seventh, something that should read the whole load has
-    started reading a slice of it."""
+    """Air con can move only House and itself: three each."""
     dead = flows.unreportable(("aircon",))
     flow_keys = {k for k in dead if k in KEYS}
     assert flow_keys == {
@@ -2315,14 +2323,14 @@ def test_solar_spends_exactly_its_reading_whenever_export_out_reads_solar(
 
 @given(**BASE)
 @SETTINGS
-def test_the_total_of_all_fifteen_flows_equals_the_total_of_the_six_sinks(
+def test_the_total_of_all_eighteen_flows_equals_the_total_of_the_six_sinks(
         solar, battery, grid, house, tesla, aircon):
     """v2-physics' invariant: this one holds on EVERY sample, in every regime,
     with no precondition at all. It is the strongest unconditional statement
     available and it is the one to rely on."""
     f = decompose(solar, battery, grid, house, tesla, aircon)
     sinks = sum(_inbound(f, s) for s in
-                ("house", "tesla", "aircon", "battery", "export", "inverter"))
+                ("house", "tesla", "aircon", "fridge", "battery", "export", "inverter"))
     _assert_close(sinks, sum(f.values()), "sinks vs flows", rel=1e-12, abs_=1e-9)
 
 
@@ -2338,7 +2346,7 @@ def test_the_total_of_all_fifteen_flows_equals_the_total_of_the_six_sinks(
 # ===========================================================================
 
 @pytest.mark.parametrize("value", [True, False])
-def test_bool_handling_is_identical_in_all_six_positions(value):
+def test_bool_handling_is_identical_in_all_seven_positions(value):
     outcomes = {}
     for idx, name in enumerate(CHANNELS):
         args = list(GOOD)
@@ -2348,7 +2356,7 @@ def test_bool_handling_is_identical_in_all_six_positions(value):
             outcomes[name] = "accepted"
         except BAD:
             outcomes[name] = "rejected"
-    assert len(outcomes) == 6
+    assert len(outcomes) == 7
     assert len(set(outcomes.values())) == 1, (
         "bool %r is handled inconsistently across channels: %r -- a guard "
         "missing on one channel injects a silent %g W through it"
@@ -2375,8 +2383,8 @@ def test_bool_defeats_a_parse_based_guard_which_is_why_it_needs_its_own():
 # **The count changed when air con arrived, and it changed in the unsafe
 # direction, so it is restated rather than adjusted.** It used to be SIX of the
 # twelve flows -- the three `*_to_house` and the three `*_to_tesla`. It is now
-# NINE of the fifteen: `A = min(aircon, house_load - T)` reads T, so a dead car
-# sensor takes the three `*_to_aircon` flows down with it. The other six flows
+# TWELVE of the eighteen: `A = min(aircon, house_load - T)` reads T, so a dead car
+# sensor takes the three air-con and three fridge flows down with it. The other six flows
 # are still blind to T, and so are six of the nine node totals, because
 # `Hr + T + A == house_load` for every T and the shares depend on S1, B and G
 # alone.
@@ -2389,7 +2397,7 @@ def test_bool_defeats_a_parse_based_guard_which_is_why_it_needs_its_own():
 
 _T_BLIND_NODES = ("battery_in", "export", "inverter",
                   "solar_spent", "battery_spent", "grid_spent")
-_T_DEPENDENT_NODES = ("house", "tesla", "aircon")
+_T_DEPENDENT_NODES = ("house", "tesla", "aircon", "fridge")
 
 
 @given(solar=SOLAR, battery=BATTERY, grid=GRID,
@@ -2410,42 +2418,36 @@ def test_exactly_six_node_totals_are_blind_to_the_tesla_reading(
                           "%s at tesla=%g" % (node, t), rel=1e-9, abs_=1e-6)
 
 
-def test_the_three_tesla_dependent_node_totals_really_do_move():
-    """The other half of the claim. If House, Tesla and Air con did NOT move
+def test_the_four_tesla_dependent_node_totals_really_do_move():
+    """The other half of the claim. If House, Tesla, Fridge and Air con did NOT move
     with T, the split would be decorative and 2026-08-27 would be fully
     reportable. They do move, which is exactly why it is not.
 
     Air con needs a fixture that presses it against the clamp -- 3500 W of air
     con inside a 4000 W load -- because with room to spare A is genuinely
-    independent of T and the node would sit still. That is the honest shape of
-    the dependency: it is real, and it only bites near the clamp.
+    independent of T and the node would sit still. Fridge also needs T close
+    enough to H to constrain its direct reading. The dependencies bite near
+    their respective clamps.
     """
-    a = flows.node_totals(decompose(3000.0, -1000.0, 1000.0, 4000.0, 0.0, 3500.0))
-    b = flows.node_totals(decompose(3000.0, -1000.0, 1000.0, 4000.0, 3000.0, 3500.0))
+    a = flows.node_totals(decompose(3000.0, -1000.0, 1000.0, 4000.0, 0.0, 3500.0, 300.0))
+    b = flows.node_totals(decompose(3000.0, -1000.0, 1000.0, 4000.0, 3900.0, 3500.0, 300.0))
     for node in _T_DEPENDENT_NODES:
         assert abs(a[node] - b[node]) > 1.0, node
-    _assert_close(a["house"] + a["tesla"] + a["aircon"],
-                  b["house"] + b["tesla"] + b["aircon"],
+    _assert_close(a["house"] + a["tesla"] + a["aircon"] + a["fridge"],
+                  b["house"] + b["tesla"] + b["aircon"] + b["fridge"],
                   "House + Tesla + Air con is invariant in T")
 
 
-def test_exactly_nine_flows_declare_a_dependency_on_the_tesla_channel():
-    """Cross-check against flows.DEPENDS_ON, which is what the HA plumbing will
-    consult when the sensor goes away. Nine, not thirteen, not six.
-
-    Six was right while the house load split two ways. The third slice is taken
-    from what the car left, so a dead Tesla reading also unmoors Air con, and
-    leaving this at six would publish three flows computed from a dead input --
-    the exact failure DEPENDS_ON exists to prevent.
-    """
+def test_exactly_twelve_flows_declare_a_dependency_on_the_tesla_channel():
+    """House, Tesla, Air con and Fridge each read T: twelve of eighteen flows."""
     dead = flows.unreportable(("tesla",))
     flow_keys = {k for k in dead if k in KEYS}
     assert flow_keys == {
         "solar_to_house", "battery_to_house", "grid_to_house",
         "solar_to_tesla", "battery_to_tesla", "grid_to_tesla",
-        "solar_to_aircon", "battery_to_aircon",
-        "grid_to_aircon"}, sorted(flow_keys)
-    assert len(flow_keys) == 9
+        "solar_to_aircon", "solar_to_fridge", "battery_to_aircon", "battery_to_fridge",
+        "grid_to_aircon", "grid_to_fridge"}, sorted(flow_keys)
+    assert len(flow_keys) == 12
 
 
 # ===========================================================================
@@ -2489,7 +2491,7 @@ def test_the_division_guard_has_no_epsilon_on_the_air_con_path_either(watts):
     """The same boundary reached through the new sink. A guard that swallowed
     small totals would blank the air-con ribbon exactly as it blanks the house
     one, and the LG channel sits at these scales for whole hours at a time --
-    it is an hourly energy derivative, so an hour with a few watt-hours in it
+    it is an hourly energy average, so an hour with a few watt-hours in it
     lands here."""
     f = decompose(watts, 0.0, 0.0, watts, 0.0, watts)
     assert f["solar_to_aircon"] == watts, (

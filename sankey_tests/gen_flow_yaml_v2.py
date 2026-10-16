@@ -1,8 +1,8 @@
-"""Regenerate flow_sensors_v2.yaml -- the fifteen flow power templates.
+"""Regenerate flow_sensors_v2.yaml -- the eighteen flow power templates.
 
-The Jinja preamble is identical in all fifteen sensors and only the final
+The Jinja preamble is identical in all eighteen sensors and only the final
 expression differs, so the file is generated rather than hand-maintained:
-test_jinja_parity.py asserts the fifteen copies are byte-identical, and a
+test_jinja_parity.py asserts the eighteen copies are byte-identical, and a
 hand-edit that touched one copy would fail that test rather than ship a quiet
 disagreement between two ribbons.
 
@@ -28,14 +28,17 @@ SENSORS = (
     ("solar_to_house",      "solar_to_house",      "Hr * w"),
     ("solar_to_tesla",      "solar_to_tesla",      "T * w"),
     ("solar_to_aircon",     "solar_to_aircon",     "A * w"),
+    ("solar_to_fridge",     "solar_to_fridge",     "F * w"),
     ("solar_to_inverter",   "solar_to_inverter",   "L * w"),
     ("battery_to_house",    "battery_to_house",    "Hr * b"),
     ("battery_to_tesla",    "battery_to_tesla",    "T * b"),
     ("battery_to_aircon",   "battery_to_aircon",   "A * b"),
+    ("battery_to_fridge",   "battery_to_fridge",   "F * b"),
     ("battery_to_inverter", "battery_to_inverter", "L * b"),
     ("grid_to_house",       "grid_to_house",       "Hr * g"),
     ("grid_to_tesla",       "grid_to_tesla",       "T * g"),
     ("grid_to_aircon",      "grid_to_aircon",      "A * g"),
+    ("grid_to_fridge",      "grid_to_fridge",      "F * g"),
     ("grid_to_battery",     "grid_to_battery",     "C * g"),
     ("grid_to_inverter",    "grid_to_inverter",    "L * g"),
 )
@@ -50,8 +53,8 @@ AVAILABILITY = """\
                       | map('abs') | list %}
           {{ vs | count == 5 and (vs | max) <= 100000 }}"""
 
-# Air con is read with `| float(0)` and is NOT in the availability list; the
-# header explains why at length. Everything else carries no default on purpose.
+# Air con and fridge are read with `| float(0)` and are NOT in the availability list; the
+# header explains why at length. The other five readings carry no default on purpose.
 PREAMBLE = """\
           {% set S  = [ 0, states('sensor.solis_inverter_solar_power')   | float ] | max %}
           {% set BP =      states('sensor.solis_inverter_battery_power') | float %}
@@ -59,14 +62,16 @@ PREAMBLE = """\
           {% set H  = [ 0, states('sensor.solis_inverter_house_load')    | float ] | max %}
           {% set TR = [ 0, states('sensor.tesla_home_charging_power')    | float ] | max %}
           {% set AR = [ 0, states('sensor.aircon_power')              | float(0) ] | max %}
+          {% set FR = [ 0, states('sensor.fridge_power')              | float(0) ] | max %}
           {% set B  = [ 0, -BP ] | max %}
           {% set C  = [ 0,  BP ] | max %}
           {% set G  = [ 0,  GP ] | max %}
           {% set E  = [ 0, -GP ] | max %}
           {% set T  = [ TR, H ] | min %}
-          {% set A  = [ AR, H - T ] | min %}
-          {% set Hr = [ 0, H - T - A ] | max %}
-          {% set L  = [ 0, (S + B + G) - (Hr + T + A + C + E) ] | max %}
+          {% set F  = [ FR, H - T ] | min %}
+          {% set A  = [ AR, H - T - F ] | min %}
+          {% set Hr = [ 0, H - T - F - A ] | max %}
+          {% set L  = [ 0, (S + B + G) - (Hr + T + A + F + C + E) ] | max %}
           {% set s2e = [ S, E ] | min %}
           {% set S1 = S - s2e %}
           {% set tot = S1 + B + G %}

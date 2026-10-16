@@ -11,7 +11,8 @@ Colours carry meaning here and were chosen deliberately:
 | Grid import | `var(--error-color)` red | The most expensive flow on the chart. It previously shared `--info-color` with House, so the thing costing the most money read as house-coloured. |
 | Grid export | `#a78bfa` violet | It earns money; red was actively misleading. The violet matches the Power card's grid trace. |
 | Tesla | `#ffffff` white | The owner's car is white. It is not an accent from the palette, so do not "correct" it to one. |
-| House | `var(--primary-color)` | Since 2026-09-11 it excludes the air con as well as the car, but keeps the name "House" -- the owner's words were "house stays named house, but is essentially rest of house". |
+| House | `var(--primary-color)` | Since 2026-09-11 it excludes the car, air con and fridge, but keeps the name "House" -- the owner's words were "house stays named house, but is essentially rest of house". |
+| Fridge | `#14b8a6` teal | Measured directly by a ZHA smart plug; distinct from Solar, Air con and Tesla. |
 | Air con | `#ff69b4` hot pink | Owner's choice, and still the colour now the node is back (2026-09-11). Yellow `#ffd60a` was tried first and rejected on sight: Solar's `--warning-color` resolves `rgb(255,166,0)` on this theme and the two blurred together. Do not retry a yellow or amber here. |
 | Solar / battery | warning (orange) / success | unchanged |
 
@@ -38,28 +39,45 @@ v1's allocation was greedy and editorially ordered; v2 measures each source->sin
 card the number. **"Card mechanics" below still describes this card and must be read before touching
 the layout**, even though v1's allocation narrative no longer describes the live chart.
 
-The graph is **two columns, 9 nodes, 15 links**: Solar / Battery out / Grid import feed House, Tesla,
-Air con, Battery in, Grid export and Inverter, and every sink is a terminus. Each link carries
+The graph is **two columns, 10 nodes, 18 links**: Solar / Battery out / Grid import feed House, Tesla,
+Air con, Fridge, Battery in, Grid export and Inverter, and every sink is a terminus. Each link carries
 `value: sensor.flow_<source>_to_<sink>_daily`, which the card applies as
 `min(parent_remainder, child_remainder, value)`, so declaration order no longer decides the picture.
-House, Tesla and Inverter have no counter of their own: each is `entity_id` plus `add_entities` over
+House, Tesla, Air con, Fridge and Inverter have no counter of their own: each is `entity_id` plus `add_entities` over
 its three inbound meters. Inverter is DC/AC conversion loss and parasitic draw, ~2.5 kWh/day, grey
 `#6b7280`.
 
-**Air con became its own terminus on 2026-09-11, at the owner's request** ("so that air con comes out
-as a node endpoint separate from 'house'"). The carve-out order is Tesla first, then air con:
+**Air con became its own terminus on 2026-09-11, at the owner's request**, and
+**Fridge became its own terminus on 2026-10-11**. The carve-out order is now Tesla,
+then Fridge, then Air con:
 
     T  = min(max(0, tesla), H)
-    A  = min(max(0, aircon), H - T)
-    Hr = H - T - A
+    F  = min(max(0, fridge), H - T)
+    A  = min(max(0, aircon), H - T - F)
+    Hr = H - T - F - A
 
-That ordering is deliberate and load-bearing. The car is the larger and far better-measured load, so
-putting it first leaves every Tesla ribbon numerically untouched by the addition, and leaves the
-Inverter node unchanged too because `Hr + T + A == H` exactly as `Hr + T == H` did. **The blindness
-runs one way only**: `A` reads `T`, so the three air-con flows depend on the Tesla channel even
-though no Tesla flow depends on air con. Flows that a dead TeslaMate unmoors therefore went from six
-of twelve to **nine of fifteen** -- do not "simplify" that count back to six, it would publish three
-ribbons computed from a dead input.
+That ordering is deliberate: best-measured loads go first. Tesla stays first, and
+`sensor.fridge_power` is a direct ZHA plug reading at roughly 10 s cadence, while
+`sensor.aircon_power` is an hourly average held for the next hour. That average can
+exceed instantaneous air-con draw. Allocating Fridge before Air con means an air-con
+overshoot can consume only House rest. Every Tesla ribbon stays numerically unchanged,
+and `Hr + T + F + A == H` keeps Inverter unchanged too. House keeps its name.
+
+**The blindness runs one way only**: F reads T; A reads T and F. Fridge flows depend
+on Tesla but ignore air con; air-con flows depend on both Tesla and fridge. Neither
+appliance can move Tesla. A dead TeslaMate still unmoors **twelve of eighteen** flows
+(House, Tesla, Fridge and Air con, three each), unchanged by this reorder. A dead
+fridge channel unmoors nine flows; a dead air-con channel unmoors six. The shared
+availability guard still blanks all eighteen flows when one of its five inputs is bad.
+
+Fridge is a teal `#14b8a6` peer of Tesla and Air con in section 1, fed directly by
+Solar, Battery out and Grid import through the same power -> integration -> daily
+utility_meter chains. Its direct power reading has `state_class: measurement`.
+Like air con it uses `| float(0)`, clamped at zero, and is deliberately ABSENT from
+the five-entity availability guard: a missing reading leaves the fridge inside House.
+Historical captures contain neither appliance reading: replay holds both at zero,
+refuses House, Air con and Fridge individually, and keeps House + Air con + Fridge
+as the knowable total excluding the car.
 
 **The Inverter node was validated against physics on 2026-08-31 and is correct.** On a pure
 grid-charging night it read 0.580 kWh two hours in; integrating the raw 5-minute power statistics
@@ -123,40 +141,37 @@ proportions are honest. Do not "fix" this by rescaling anything.
 
 ### The air-con channel is measured differently from everything else
 
-`sensor.aircon_power` is **a `derivative` helper, not a sensor**, and everything awkward about the Air
-con node follows from that. `lg_thinq` publishes twelve entities for the unit and **not one of them is
-power** -- checked in the entity registry 2026-09-11, there is not even a disabled-by-default one to
-enable. What it does publish is `sensor.living_room_air_conditioner_energy_today`, in Wh.
+`sensor.aircon_power` is now a **trigger-based template sensor** in the HA package
+`/config/packages/aircon_power.yaml`; a copy is kept at
+[`ha_packages/aircon_power.yaml`](../ha_packages/aircon_power.yaml). `lg_thinq`
+publishes no power entity for the unit, only `energy_today` in Wh. The monthly
+counter updates once a day and was rejected; the daily counter changes roughly hourly
+(measured over four days: 95 changes, median gap 3600 s).
 
-So the chain is `energy_today` -> `derivative` (`unit_time: h`, `round: 2`, `time_window: 0`,
-`max_sub_interval: 2h`) -> `sensor.aircon_power` -> the three `flow_*_to_aircon_*` chains. Measured
-cadence over four days:
+It replaced the UI `derivative` helper on **2026-10-11** because LG re-sends unchanged
+readings: each repeat counted as zero change, dropping power to 0 W partway through
+every hour. Two readings seconds apart also produced spikes up to **~1.4 MW**.
+On 2026-10-11 the Sankey credited **2.05 kWh** to air con against LG's **3.2 kWh**.
 
-    energy_today       95 changes / 4 days, median gap 3600 s
-    energy_this_month   8 changes / 4 days, median gap 22594 s
+The new sensor converts each changed `energy_today` step into average power over the
+interval it covers and holds that value. Changes less than 15 minutes apart are
+merged into the next step. A drop is treated as the daily reset, using the new reading
+as energy used since the reset; the reset is now observed at about **00:14 local**.
+No step for **90 minutes** reads 0, and a step more than 20 hours after the last only re-baselines. It reads 0 until its first baseline after creation
+and restores its state and baseline across restarts, so the former claim of
+`unknown` for up to two hours after every restart no longer applies.
 
-**Use `energy_today`. The monthly counter updates once a day** and was rejected for that. Three
-consequences, all accepted and none of them faults to fix:
+**The accepted caveat remains: the split lags by up to an hour.** The held average
+describes the interval just past, so around sunrise and sunset that usage is attributed
+to the following interval's source mix. This lag does not itself change daily totals;
+clamping a held average against instantaneous House load can still limit the carve-out.
 
-- **The air-con split is hourly and lags by up to an hour**, while every other ribbon is sampled at
-  10 s. The derivative holds one value for an hour and that value describes the hour just *past*, so
-  around sunrise and sunset the air con is attributed to the following hour's source mix. Daily
-  totals are unaffected.
-- **One hour a day is not attributed at all.** `energy_today` resets at about 00:36 (the cloud poll,
-  not midnight), so the 23:36-00:36 delta is negative and clamps to zero; that hour's air con stays
-  inside House. Overnight standby is about 10 Wh/h, so the loss is small and in the safe direction.
-- **The first value after the helper is created is inflated** and self-corrects within the hour.
-  Observed 2026-09-11: created 12:18, first step 12:36 reading 40.55 W for a 12 Wh hourly step,
-  because the derivative divided by the 17.9 minutes since creation rather than by an hour.
-
-**`sensor.aircon_power` is the one reading taken with `| float(0)`, and it is deliberately ABSENT from
-the availability guard, which still counts exactly five entities.** Both are the opposite of the rule
-the other five follow and both are load-bearing: the derivative reads `unknown` for up to two hours
-after every restart, and guarding on it would blank all fifteen flows for that whole window, every
-restart. A missing reading gives A = 0, which puts the air con back inside House -- the house total
-stays right, nothing is fabricated, and only the split is lost. Note the default covers only text
-Jinja cannot parse: `'inf'` and `'1e9'` parse, and it is the `[ AR, H - T ] | min` clamp that contains
-them.
+Both `sensor.aircon_power` and `sensor.fridge_power` retain `| float(0)` and remain
+ABSENT from the availability guard, which still counts exactly five entities.
+A missing reading gives A = 0 or F = 0 and keeps that load inside House; the house
+total stays right and only the split is lost. The default covers only text Jinja
+cannot parse: `'inf'` and `'1e9'` parse, so the `[ AR, H - T - F ] | min` clamp
+contains air-con overshoots. Fridge has already been allocated and cannot be starved.
 
 Verified live 2026-09-11, against the config entries HA actually stores rather than the YAML: all
 fifteen deployed templates reproduce `sankey_tests/flows.py` to **4.8e-05 W** with the air con
@@ -194,11 +209,11 @@ showed 3.4 kWh "Untracked / losses" when the real residual was 0.1.
 **A link spanning more than one section makes the card invent an unlabelled ghost box, coloured like
 its target.** This is what made the battery appear to charge itself:
 
-    if(h-d<=1)continue; ... const s=t(l,["id","section","type"]);
+    if(h-d<=1){continue;} ... const s=t(l,["id","section","type"]);
     e.push({...s, id:`${u}__passthrough_${i}__auto`, section:i, type:"passthrough"})
 
 It clones the **target's** props including `color`, draws at `fill-opacity:.4`, and suppresses name
-and state (`if("passthrough"===t.config.type||!r&&!a)return null`). An unlabelled green box beside a
+and state (`if("passthrough"===t.config.type||!r&&!a){return null;}`). An unlabelled green box beside a
 green Battery-out box, or a matching unlabelled red one when export goes above zero, is the giveaway.
 Passthroughs do not change the arithmetic (`r={parent:e,child:o,...,passthroughs:n}`). Fixed
 2026-08-28 by collapsing four sections to three, so every link is exactly one hop and the machinery
@@ -297,7 +312,7 @@ chart just quietly goes back to being up to an hour behind. So:
 - Verify by selecting today (should track within ~5 min) and a date older than a week (must still
   render, via the `hour` fallback).
 
-Status 2026-09-07: **applied**, minified names still `bi`/`Se`. Verified live 2026-09-08 by driving the
+Status 2026-09-07: **applied**, minified names still `bi`/`Se`. **Found reverted 2026-10-11** (a HACS update on 2026-09-26 had overwritten it, so the chart lagged for two weeks); re-applied with the names now `Ei`/`Ae`, `Ae` re-confirmed as signed `differenceInDays(t, e)`. **Regenerate `ha-sankey-chart.js.gz` after patching** (`gzip -9 -k -f ha-sankey-chart.js`): the server sends the `.gz` to any browser that accepts gzip, so patching only the `.js` changes nothing a browser sees. Verified live 2026-09-08 by driving the
 card's own data: 2026-09-05 and 2026-09-03 (inside the guard, so `5minute`) render fully at 50.1 and
 37.9 kWh, and **2026-08-31, eight days back and therefore on the `hour` fallback, still renders at
 48.2 kWh** -- which is the failure the guard exists to prevent.

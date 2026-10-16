@@ -17,10 +17,10 @@ Dry run unless --apply.
     uv run --no-project --with pyyaml --with websockets python sankey_helpers.py --apply
 
 ORDER MATTERS, and the script enforces it: existing power templates are updated
-BEFORE any new chain is created. Updating first briefly leaves the air-con watts
+BEFORE any new chain is created. Updating first briefly leaves the carved-out appliance watts
 assigned to no link at all, which the card renders as a slightly shorter source
 bar and nothing else. Creating first would briefly count them twice, once inside
-House and once in Air con, which is a wrong number rather than a missing one.
+House and once in its own terminus, which is a wrong number rather than a missing one.
 """
 import argparse
 import asyncio

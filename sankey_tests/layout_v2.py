@@ -12,14 +12,16 @@ The graph (BRIEF_V2.md section 1)::
     Battery out  ->      Battery in
     Grid import  ->      House
                          Tesla
+                         Air con
+                         Fridge
                          Inverter
 
-    solar   -> grid_export | battery_in | house | tesla | inverter
-    bat_out -> house | tesla | inverter
-    grid    -> tesla | house | battery_in | inverter
+    solar   -> grid_export | battery_in | house | tesla | aircon | fridge | inverter
+    bat_out -> house | tesla | aircon | fridge | inverter
+    grid    -> tesla | house | aircon | fridge | battery_in | inverter
 
-That is **12** links, one per source->sink flow (solar 5, battery out 3, grid
-import 4), each carrying a per-link `value`. Every sink is a terminus, so the
+That is **18** links, one per source->sink flow (solar 7, battery out 5, grid
+import 6), each carrying a per-link `value`. Every sink is a terminus, so the
 chart is two columns and every box in the right-hand column is at the same x.
 
 **Two nodes were deliberately removed on 2026-08-30, in this order.** Do not
@@ -29,9 +31,9 @@ re-add either without being asked.
     only ever restated Battery in's own number one column to the right.
 *   "Air con" and "Rest of house", House's device split at section 2. Dropping
     them is what makes House a terminus and lets Tesla sit level with every
-    other sink -- which is the whole reason the split went. The air-con
-    entity still exists in HA and is unaffected; it is simply not on this
-    chart. CLAUDE.md's older note that the owner wants the breakdown "only in
+    other sink -- which is the whole reason the split went. Air con
+    was restored as a section-1 terminus on 2026-09-11; Fridge joined it on
+    2026-10-11. CLAUDE.md's older note that the owner wants the breakdown "only in
     the Sankey" is superseded by that choice.
 
 `NODES`, `LINKS`, `SECTIONS`, `SOURCE_SINK_LINKS`, `COLORS` and `FLOW_METERS`
@@ -56,27 +58,31 @@ beautified copy.
         if (t.connection_entity_id) {
           const e = this._getMemoizedState(t.connection_entity_id).state ?? 0;
           t.state = Math.min(m, y, e);
-        } else t.state = Math.min(m, y);
+        } else {
+          t.state = Math.min(m, y);
+        }
 
     So the rule really is `min(parent_remainder, child_remainder, value)`, and
     supplying every source->sink value collapses the card's order sensitivity.
 
 2.  **A `type: "passthrough"` node cannot be a terminus, and renders as a
     ghost.** `willUpdate` skips a passthrough as a connection *parent*
-    (`else if ("passthrough" === e.type) return;`, minified char offset 58755)
+    (`else if ("passthrough" === e.type) { return; }`, minified char offset 58755)
     and, when resolving a child, walks *through* it (offset 58963)::
 
         for (; "passthrough" === s?.type;) {
           n.push(s);
           const e = s.children[0];
-          if (!e) throw this.error = new Error(missing_child ...);
+          if (!e) {
+            throw this.error = new Error(missing_child ...);
+          }
           s = t.get(Me(e));
         }
 
     A declared passthrough with no children therefore throws `missing_child`
     outright. Even with a child it is invisible as a box: the icon is gated by
     `l = "passthrough" !== n.config.type` (offset 54613), the label and state
-    by `if ("passthrough" === t.config.type || (!r && !a)) return null`
+    by `if ("passthrough" === t.config.type || (!r && !a)) { return null; }`
     (offset 55685), and the bar is dimmed by
     `.box.type-passthrough .color-bar{fill-opacity:.4}` (offset 48739). Its
     state is not its own either -- `_getEntityState` returns the *child's*
@@ -100,7 +106,7 @@ beautified copy.
     node existing at all is seeing which source charged the car. The layout
     went to two columns instead. Do not propose the House-hub shape again.
 
-Node identity follows BRIEF_V2.md section 1. House, Tesla and Inverter are the
+Node identity follows BRIEF_V2.md section 1. House, Tesla, Air con, Fridge and Inverter are the
 *sum of their own inbound flow meters*, expressed with the card's
 `add_entities` so that no further helper is needed: the node's `entity_id` is
 the first inbound meter and `add_entities` carries the other two. Solar,
@@ -112,6 +118,8 @@ import copy
 __all__ = [
     "AIRCON",
     "AIRCON_COLOR",
+    "FRIDGE",
+    "FRIDGE_COLOR",
     "BAT_IN",
     "BAT_OUT",
     "COLORS",
@@ -150,9 +158,10 @@ EXPORT = "sensor.solis_inverter_grid_export_today"
 HOUSE = "house"
 TESLA = "tesla"
 AIRCON = "aircon"
+FRIDGE = "fridge"
 INVERTER = "inverter"
 
-# The 15 daily utility_meter helpers, one per source->sink flow. Naming is
+# The 18 daily utility_meter helpers, one per source->sink flow. Naming is
 # `sensor.flow_<source>_to_<sink>_daily`, where `battery` means discharge on
 # the source side and charge on the sink side, and `grid` means import on the
 # source side and export on the sink side. Each is fed by a Riemann
@@ -162,6 +171,7 @@ _SINK_SLUG = {
     HOUSE: "house",
     TESLA: "tesla",
     AIRCON: "aircon",
+    FRIDGE: "fridge",
     BAT_IN: "battery",
     EXPORT: "grid",
     INVERTER: "inverter",
@@ -183,21 +193,24 @@ SOURCE_SINK_LINKS = [
     (SOLAR, HOUSE),
     (SOLAR, TESLA),
     (SOLAR, AIRCON),
+    (SOLAR, FRIDGE),
     (SOLAR, INVERTER),
     (BAT_OUT, HOUSE),
     (BAT_OUT, TESLA),
     (BAT_OUT, AIRCON),
+    (BAT_OUT, FRIDGE),
     (BAT_OUT, INVERTER),
     (GRID_IN, TESLA),
     (GRID_IN, HOUSE),
     (GRID_IN, AIRCON),
+    (GRID_IN, FRIDGE),
     (GRID_IN, BAT_IN),
     (GRID_IN, INVERTER),
 ]
 
 FLOW_METERS = [flow_meter(source, sink) for source, sink in SOURCE_SINK_LINKS]
 
-# The bridge to flows.py. That module names the same twelve flows as flat
+# The bridge to flows.py. That module names the same eighteen flows as flat
 # strings (`solar_to_house`, ...); this layout names them as (source id, sink
 # id) pairs. Both namings are load-bearing -- flows.py's keys reach the Jinja
 # templates, these pairs reach the card config -- so the mapping lives here, in
@@ -240,6 +253,9 @@ TESLA_COLOR = "#ffffff"
 # together. Do not retry a yellow or an amber here.
 AIRCON_COLOR = "#ff69b4"
 
+# Teal keeps the directly measured fridge distinct from Solar, Air con and Tesla.
+FRIDGE_COLOR = "#14b8a6"
+
 # New in v2. The Inverter node is conversion loss and parasitic draw -- energy
 # that arrived and did no work. Neutral grey is the only choice left that
 # carries the right meaning and cannot be confused with a real flow: it is the
@@ -257,6 +273,7 @@ COLORS = {
     HOUSE: HOUSE_COLOR,
     TESLA: TESLA_COLOR,
     AIRCON: AIRCON_COLOR,
+    FRIDGE: FRIDGE_COLOR,
     BAT_IN: BATTERY_COLOR,
     EXPORT: EXPORT_COLOR,
     INVERTER: INVERTER_COLOR,
@@ -275,9 +292,9 @@ NODES = [
     {"id": BAT_OUT, "name": "Battery out", "section": 0, "color": BATTERY_COLOR},
     {"id": GRID_IN, "name": "Grid import", "section": 0, "color": GRID_IN_COLOR},
 
-    # House / Tesla / Air con / Inverter are each the sum of their own inbound
+    # House / Tesla / Air con / Fridge / Inverter are each the sum of their own inbound
     # meters. House keeps its name but is now the rest of the house: both the
-    # car and the air con are carved out of it, exactly as the owner asked on
+    # car, air con and fridge are carved out of it, exactly as the owner asked on
     # 2026-09-11 ("house stays named house, but is essentially rest of house").
     {
         "id": HOUSE,
@@ -302,6 +319,14 @@ NODES = [
         "color": AIRCON_COLOR,
         "entity_id": flow_meter(SOLAR, AIRCON),
         "add_entities": [flow_meter(BAT_OUT, AIRCON), flow_meter(GRID_IN, AIRCON)],
+    },
+    {
+        "id": FRIDGE,
+        "name": "Fridge",
+        "section": 1,
+        "color": FRIDGE_COLOR,
+        "entity_id": flow_meter(SOLAR, FRIDGE),
+        "add_entities": [flow_meter(BAT_OUT, FRIDGE), flow_meter(GRID_IN, FRIDGE)],
     },
     {"id": BAT_IN, "name": "Battery in", "section": 1, "color": BATTERY_COLOR},
     {"id": EXPORT, "name": "Grid export", "section": 1, "color": EXPORT_COLOR},
@@ -371,9 +396,9 @@ def states_from(counters, flows):
     """Assemble the card's `states` dict.
 
     counters: {entity id: kWh} for the five daily counters.
-    flows:    {(source id, sink id): kWh} for the 12 source->sink flows.
+    flows:    {(source id, sink id): kWh} for the 18 source->sink flows.
 
-    House, Tesla and Inverter deliberately have no entry: their state is
+    House, Tesla, Air con, Fridge and Inverter deliberately have no entry: their state is
     derived by the card from the flow meters via `add_entities`.
     """
     states = dict(counters)

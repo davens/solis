@@ -29,7 +29,7 @@ sanity check on shape and sign, NOT ground truth. It is used that way here.
 What this suite does and does not prove
 ---------------------------------------
 It proves the *arithmetic* chain: recorded power -> left-Riemann integral ->
-fifteen directed flows -> the daily counters. It cannot prove the attribution
+eighteen directed flows -> the daily counters. It cannot prove the attribution
 itself, because the inverter never measures which source fed which sink
 (CLAUDE.md, "Sankey: presentation, not measurement"). A flow that reconciles to
 its counter is consistent, not verified.
@@ -664,12 +664,12 @@ def test_every_integrated_flow_is_non_negative(day):
 
 
 @pytest.mark.parametrize("day", ALL_DAYS)
-def test_all_fifteen_flows_are_present(day):
-    """Fifteen since 2026-09-11, when air con became the sixth input channel and
+def test_all_eighteen_flows_are_present(day):
+    """Eighteen since 2026-09-11, when air con became the sixth input channel and
     a sink of its own. The count is pinned rather than merely compared against
     `FLOWS` so that a flow silently disappearing from BOTH sides still fails."""
     assert set(result(day)["flows"]) == set(FLOWS)
-    assert len(FLOWS) == 15
+    assert len(FLOWS) == 18
 
 
 @pytest.mark.parametrize("day", ALL_DAYS)
@@ -682,7 +682,7 @@ def test_no_battery_to_grid_flow_can_exist(day):
 
 
 @pytest.mark.parametrize("day", ALL_DAYS)
-def test_house_and_aircon_inflows_reproduce_the_house_load_excluding_the_car(day):
+def test_house_and_aircon_fridge_inflows_reproduce_the_house_load_excluding_the_car(day):
     """v2's House node is house_load MINUS the car and MINUS the air con, and
     the six inflows of the two together must fill `house_load - tesla` to the
     last watt-second.
@@ -701,12 +701,12 @@ def test_house_and_aircon_inflows_reproduce_the_house_load_excluding_the_car(day
     """
     r = result(day)
     house_excl_car = r["raw"]["house"] - r["raw"]["tesla"]
-    assert r["derived"]["house_and_aircon"] == pytest.approx(
+    assert r["derived"]["house_and_aircon_fridge"] == pytest.approx(
         house_excl_car, abs=EXACT_KWH)
 
 
 @pytest.mark.parametrize("day", ALL_DAYS)
-def test_the_house_and_aircon_split_is_refused_while_the_aircon_channel_is_blind(day):
+def test_the_house_and_aircon_fridge_split_is_refused_while_the_aircon_channel_is_blind(day):
     """The other half of the test above, and the reason it sums two nodes.
 
     No capture carries an air-con series, so House and Air con individually are
@@ -720,12 +720,12 @@ def test_the_house_and_aircon_split_is_refused_while_the_aircon_channel_is_blind
     was measuring.
     """
     doc = result(day)["doc"]
-    assert replay.blind_channels(doc) >= frozenset(("aircon",))
+    assert replay.blind_channels(doc) >= frozenset(("aircon", "fridge"))
     dead = replay.unknowable(doc)
     assert {"house", "aircon"} <= dead, (
         "%s reports House/Air con as measurements while the air-con channel is "
         "blind" % day)
-    assert "house_and_aircon" not in dead
+    assert "house_and_aircon_fridge" not in dead
     for survivor in ("tesla", "inverter", "grid_export", "grid_import",
                      "battery_charge", "battery_discharge", "solar"):
         assert survivor not in dead, (
@@ -808,7 +808,7 @@ def _assert_degenerate(where, solar, battery, grid, house, tesla):
         key = source + "_to_aircon"
         assert got[key] == 0.0, "%s: %s = %r at A = 0" % (where, key, got[key])
     assert set(got) - set(want) == {"solar_to_aircon", "battery_to_aircon",
-                                    "grid_to_aircon"}
+                                    "grid_to_aircon", "solar_to_fridge", "battery_to_fridge", "grid_to_fridge"}
     for key, value in want.items():
         assert got[key] == value, (
             "%s: %s moved when the air con arrived: %r != %r"
@@ -892,12 +892,12 @@ def test_a_four_channel_doc_refuses_the_tesla_quantities_as_well(day):
     five = replay.load_day(day, tesla=True)
     four = replay.load_day(day, tesla=False)
 
-    assert replay.blind_channels(five) == frozenset(("aircon",))
-    assert replay.blind_channels(four) == frozenset(("aircon", "tesla"))
+    assert replay.blind_channels(five) == frozenset(("aircon", "fridge"))
+    assert replay.blind_channels(four) == frozenset(("aircon", "fridge", "tesla"))
 
     dead_five = fmod.unreportable(replay.blind_channels(five))
     dead_four = fmod.unreportable(replay.blind_channels(four))
-    assert dead_five == fmod.unreportable(frozenset(("aircon",)))
+    assert dead_five == fmod.unreportable(frozenset(("aircon", "fridge")))
     assert dead_five < dead_four, "the car costs nothing extra to go blind"
 
     # What the car costs on top: exactly the quantities that read T and not A.
@@ -986,20 +986,20 @@ def test_the_decomposition_conserves_energy_between_sources_and_sinks(day):
     same six flow keys twice in a different order and asserted abs(x - x) < 1e-9.
 
     This version groups by SOURCE on one side and by SINK on the other, which
-    are genuinely different partitions of the fifteen flows, so a flow that were
+    are genuinely different partitions of the eighteen flows, so a flow that were
     counted in one grouping and not the other would show up.
     """
     f = result(day)["flows"]
     by_source = sum(source_spend(day, s) for s in ("solar", "battery", "grid"))
     by_sink = sum(v for k, v in f.items())
     assert by_source == pytest.approx(by_sink, abs=1e-9)
-    # ...and the sink-side grouping really is a partition of all fifteen keys.
+    # ...and the sink-side grouping really is a partition of all eighteen keys.
     # `aircon` joined the list on 2026-09-11; omitting it here would have left
     # three flows out of the sink-side sum and this test would have caught it.
-    sinks = ("house", "tesla", "aircon", "battery", "export", "inverter")
+    sinks = ("house", "tesla", "aircon", "fridge", "battery", "export", "inverter")
     counted = sum(v for k, v in f.items() if k.split("_to_")[1] in sinks)
     assert counted == pytest.approx(by_sink, abs=1e-9)
-    assert len(f) == 15
+    assert len(f) == 18
 
 
 # ===========================================================================
@@ -1144,7 +1144,7 @@ def test_house_plus_aircon_plus_tesla_flows_match_house_consumption_today(day):
     against the counter, which the decomposition inherits and cannot fix (see
     section 4)."""
     r = result(day)
-    got = r["derived"]["house_and_aircon"] + r["derived"]["tesla"]
+    got = r["derived"]["house_and_aircon_fridge"] + r["derived"]["tesla"]
     want = counter(day, "house")
     err = signed_pct(got, want)
     assert -HOUSE_SHORTFALL_PCT_MAX <= err <= DEPLOY_TOL_PCT, (
@@ -1205,65 +1205,6 @@ def test_all_five_solar_outflows_match_solar_today(day):
     assert within_counter_tolerance(got, want, POWER_VS_COUNTER_TOL_PCT), (
         "%s solar: flows %.3f vs counter %.3f (%+.2f%%)"
         % (day, got, want, signed_pct(got, want)))
-
-
-# ===========================================================================
-# 9. Retired v1 tests, kept skipped pending the lead's confirmation to delete.
-#
-# Each of these tested a property of v1's sequential-greedy decomposition with
-# late AC referral. v2 has neither, so they have no subject -- they are not
-# failing, they are meaningless. They are listed here rather than deleted so
-# that the decision is visible and reversible; every one names its replacement.
-# ===========================================================================
-
-_RETIRED = "v1-only: superseded by v2. Pending confirmation to delete."
-
-
-@pytest.mark.skip(reason=_RETIRED + " Replaced by "
-                  "test_report_the_two_loss_rules_measured_over_every_replay_day.")
-def test_loss_treatments_measured_over_a_real_day():
-    """Drove decompose.LOSS_TREATMENTS over residual_on_solar / derived_solar_ac
-    / fixed_efficiency. None of those exist in v2: they were three ways of
-    referring DC to AC with a fitted constant, and v2 has no fitted constant."""
-
-
-@pytest.mark.skip(reason=_RETIRED + " Replaced by "
-                  "test_the_selected_loss_rule_is_the_documented_default.")
-def test_selected_loss_treatment_is_the_documented_default():
-    """Asserted LOSS_TREATMENT == 'residual_on_solar'."""
-
-
-@pytest.mark.skip(reason=_RETIRED + " Replaced by "
-                  "test_all_four_grid_outflows_match_grid_import_today.")
-def test_grid_to_house_plus_grid_to_battery_matches_grid_import_today():
-    """Summed two of what are now four grid destinations and called the
-    difference a defect."""
-
-
-@pytest.mark.skip(reason=_RETIRED + " No leak exists in v2; see "
-                  "test_each_source_spends_its_own_integral.")
-def test_grid_import_leak_is_bounded():
-    """Bounded a -25% shortfall that is now structurally impossible."""
-
-
-@pytest.mark.skip(reason=_RETIRED + " Replaced by "
-                  "test_all_three_battery_outflows_match_battery_discharge_today.")
-def test_battery_to_house_matches_battery_discharge_today():
-    """battery_to_house was capped at the house load in v1; in v2 the battery
-    has three destinations and no cap."""
-
-
-@pytest.mark.skip(reason=_RETIRED + " No leak exists in v2; see "
-                  "test_each_source_spends_its_own_integral.")
-def test_battery_discharge_leak_is_bounded():
-    """Bounded a -25% shortfall that is now structurally impossible."""
-
-
-@pytest.mark.skip(reason=_RETIRED + " Replaced by "
-                  "test_all_five_solar_outflows_match_solar_today.")
-def test_solar_flows_vs_solar_today_dc_shortfall_is_quantified_not_asserted_equal():
-    """Recorded solar's spend as a bound rather than an equality, because v1's
-    solar absorbed a fitted residual. v2 spends solar exactly."""
 
 
 # ===========================================================================

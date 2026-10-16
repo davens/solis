@@ -45,10 +45,10 @@ one: held at 0 W so the arithmetic can run, with every quantity the reading coul
 have moved refused by `flows.unreportable()` instead of reported.
 
 The consequence to hold on to is that **House is unknowable on every day here,
-and House + Air con is not.** `Hr + A == house_load - T` for every A, so the pair
+and House + Air con + Fridge is not.** `Hr + A == house_load - T` for every A, so the pair
 survives a dead air-con sensor while its two halves do not -- the identical shape
 to `Hr + T == house_load` surviving a dead Tesla sensor. Every reconciliation in
-this file that used to face House now faces House + Air con, at the same
+this file that used to face House now faces House + Air con + Fridge, at the same
 tolerance and against the same counter; nothing was loosened to accommodate the
 new channel.
 
@@ -235,7 +235,7 @@ def replay(day, fn=None, end=None, aircon=None):
     aircon = (lambda s, b, g, h, t: 0.0) if aircon is None else aircon
     out = {}
     raw = dict.fromkeys(
-        ("solar", "house", "tesla", "aircon", "house_rest", "house_and_aircon",
+        ("solar", "house", "tesla", "aircon", "house_rest", "house_and_aircon_fridge",
          "grid_import", "grid_export", "battery_charge", "battery_discharge",
          "supply"), 0.0)
     gap_s = live_s = 0.0
@@ -263,11 +263,11 @@ def replay(day, fn=None, end=None, aircon=None):
         raw["house"] += max(0.0, house) * h
         raw["tesla"] += t_clamped * h
         raw["aircon"] += a_clamped * h
-        # House alone needs the air-con reading; House + Air con does not, being
+        # House alone needs the air-con reading; House + Air con + Fridge does not, being
         # house_load - tesla whatever the air con was doing. Both are carried so
         # a test can say which one it is reconciling.
         raw["house_rest"] += (max(0.0, house) - t_clamped - a_clamped) * h
-        raw["house_and_aircon"] += (max(0.0, house) - t_clamped) * h
+        raw["house_and_aircon_fridge"] += (max(0.0, house) - t_clamped) * h
         raw["grid_import"] += max(0.0, grid) * h
         raw["grid_export"] += max(0.0, -grid) * h
         raw["battery_charge"] += max(0.0, battery) * h
@@ -278,7 +278,8 @@ def replay(day, fn=None, end=None, aircon=None):
             out[k] = out.get(k, 0.0) + w * h
     return {"flows": out, "raw": raw, "gap_s": gap_s, "live_s": live_s,
             "tesla_clamped_s": tesla_clamped_s,
-            "aircon_assumed_s": aircon_assumed_s}
+            "aircon_assumed_s": aircon_assumed_s,
+            "fridge_assumed_s": live_s}
 
 
 def _r(day, fn=None):
@@ -316,7 +317,7 @@ def blind_channels(day):
     either one would change what gets refused instead of leaving a stale list
     quietly refusing a figure that is now measurable.
     """
-    blind = {"aircon"}
+    blind = {"aircon", "fridge"}
     if not tesla_usable(day):
         blind.add("tesla")
     return frozenset(blind)
@@ -336,6 +337,7 @@ NODE_QUANTITY = {
     "house": "house",
     "tesla": "tesla",
     "aircon": "aircon",
+    "fridge": "fridge",
 }
 
 
@@ -352,10 +354,11 @@ def node_values(day):
         "house": inbound(f, "house"),
         "tesla": inbound(f, "tesla"),
         "aircon": inbound(f, "aircon"),
+        "fridge": inbound(f, "fridge"),
         # House with the air con put back: knowable on every day here, because
         # `Hr + A == house_load - T` for every A. This is the figure that faces
         # house_consumption_today minus the car.
-        "house_and_aircon": inbound(f, "house") + inbound(f, "aircon"),
+        "house_and_aircon_fridge": inbound(f, "house") + inbound(f, "aircon") + inbound(f, "fridge"),
     }
 
 
@@ -367,7 +370,7 @@ def reported_nodes(day):
     cases the dead sensor decides ONE thing -- how a metered total splits -- and
     nothing else: `Hr + T + A == house_load` whatever T and A are, so every
     source, export, battery-in and inverter total survives untouched, and so
-    does House + Air con. A number in a refused slot would be fabricated, and on
+    does House + Air con + Fridge. A number in a refused slot would be fabricated, and on
     2026-08-27's Tesla it would be fabricated by 8.384 kWh in a known direction.
 
     The refusals come from `flows.unreportable()` rather than from a list here.
@@ -381,9 +384,9 @@ def reported_nodes(day):
     # The combined figure has no DEPENDS_ON entry of its own -- it is a sum of
     # two -- so it is refused only by a channel House needs for some reason
     # OTHER than the air-con split, i.e. `tesla` on a Tesla-blind day.
-    combined_blind = (flows.DEPENDS_ON["house"] - {"aircon"}) & blind_channels(day)
-    out["house_and_aircon"] = (None if combined_blind
-                               else values["house_and_aircon"])
+    combined_blind = (flows.DEPENDS_ON["house"] - {"aircon", "fridge"}) & blind_channels(day)
+    out["house_and_aircon_fridge"] = (None if combined_blind
+                               else values["house_and_aircon_fridge"])
     return out
 
 
@@ -757,11 +760,11 @@ def test_every_integrated_flow_is_non_negative(day):
 
 
 @pytest.mark.parametrize("day", ALL_DAYS)
-def test_all_fifteen_flows_are_present_over_a_real_day(day):
-    """Fifteen since air con became the sixth channel on 2026-09-11. Checked
+def test_all_eighteen_flows_are_present_over_a_real_day(day):
+    """Eighteen since air con became the sixth channel on 2026-09-11. Checked
     against `flows.FLOWS` as well as against the count, so neither a flow that
     stopped being integrated nor one that vanished from both sides gets past."""
-    assert len(_r(day)["flows"]) == 15
+    assert len(_r(day)["flows"]) == 18
     assert set(_r(day)["flows"]) == set(flows.FLOWS)
 
 
@@ -964,16 +967,15 @@ def test_house_plus_aircon_tracks_its_counter_once_the_car_is_removed(day):
     roughly constant power offset rather than a percentage: see the tolerance
     block for why a percentage bound cannot distinguish the two failure shapes.
     """
-    r = _r(day)
     hours = (day_end(day) - float(history(day)["start_epoch"])) / 3600.0
-    got = node_values(day)["house_and_aircon"]
+    got = node_values(day)["house_and_aircon_fridge"]
     want = counter(day, "house") - tesla_counter_kwh(day)
     deficit_w = 1000.0 * (want - got) / hours
     assert HOUSE_DEFICIT_W_MIN <= deficit_w <= HOUSE_DEFICIT_W_MAX, (
         "%s house+aircon: %.3f kWh vs counter-minus-car %.3f kWh -- a %.1f W "
         "mean deficit, outside the known %.0f-%.0f W house_load offset"
         % (day, got, want, deficit_w, HOUSE_DEFICIT_W_MIN, HOUSE_DEFICIT_W_MAX))
-    assert reported_nodes(day)["house_and_aircon"] is not None, (
+    assert reported_nodes(day)["house_and_aircon_fridge"] is not None, (
         "%s: the quantity this test reconciles is being refused as unknowable, "
         "so either the assertion above is measuring nothing or the refusal is "
         "too broad" % day)
@@ -985,7 +987,7 @@ def test_the_house_deficit_is_an_offset_not_a_scale_error(day):
     days while the wattage barely moves. That is the signature of a fixed offset
     in the house_load sensor, not of the decomposition losing a fraction of the
     house -- and it is the reason the test above is in watts."""
-    got = node_values(day)["house_and_aircon"]
+    got = node_values(day)["house_and_aircon_fridge"]
     want = counter(day, "house") - tesla_counter_kwh(day)
     assert got < want, "%s: house+aircon exceeds its counter" % day
     assert want - got <= 3.0, (
@@ -1061,12 +1063,12 @@ def test_house_and_tesla_are_reported_as_unknowable_on_a_tesla_blind_day(day):
     `reported_nodes()` returns None for both, and this is the test that keeps it
     that way.
 
-    House + Air con goes with them on this day, and only on this day: its
+    House + Air con + Fridge goes with them on this day, and only on this day: its
     refusal is the missing Tesla reading, not the missing air-con one.
     """
     got = reported_nodes(day)
     assert got["house"] is None and got["tesla"] is None
-    assert got["house_and_aircon"] is None, (
+    assert got["house_and_aircon_fridge"] is None, (
         "%s: house+aircon is house_load MINUS the car, and the car is the "
         "sensor that is dead here" % day)
     for other in ("solar", "battery_out", "grid_import", "grid_export",
@@ -1077,7 +1079,7 @@ def test_house_and_tesla_are_reported_as_unknowable_on_a_tesla_blind_day(day):
 
 
 @pytest.mark.parametrize("day", AIRCON_BLIND_DAYS)
-def test_house_and_aircon_are_reported_as_unknowable_on_every_day_here(day):
+def test_house_and_aircon_fridge_are_reported_as_unknowable_on_every_day_here(day):
     """The same ruling as above, applied to the channel no capture has at all.
 
     Air con was added to `decompose()` on 2026-09-11 and these four days were
@@ -1108,7 +1110,7 @@ def test_house_and_aircon_are_reported_as_unknowable_on_every_day_here(day):
         assert got["tesla"] is not None, (
             "%s: Tesla is refused although T is clamped out of house_load "
             "before A is, so the air-con reading cannot move it" % day)
-        assert got["house_and_aircon"] is not None, (
+        assert got["house_and_aircon_fridge"] is not None, (
             "%s: house+aircon is refused although the air-con reading cannot "
             "move it -- the refusal has become too broad to be useful" % day)
     else:
@@ -1116,7 +1118,7 @@ def test_house_and_aircon_are_reported_as_unknowable_on_every_day_here(day):
         # the absent air-con one. Asserted here so the two reasons stay
         # distinguishable: if air con alone ever started refusing the sum, the
         # TESLA_DAYS branch above would fail and this one would not notice.
-        assert got["house_and_aircon"] is None
+        assert got["house_and_aircon_fridge"] is None
 
 
 @pytest.mark.parametrize("day", AIRCON_BLIND_DAYS)
@@ -1196,7 +1198,7 @@ def test_seven_node_totals_are_provably_blind_to_the_aircon_reading(day):
     days keep reporting a Tesla figure, and if flows.py ever carved A out first
     this is the test that would catch it.
 
-    House + Air con is checked as well, because it is the quantity every
+    House + Air con + Fridge is checked as well, because it is the quantity every
     counter reconciliation in this file now faces; if the air-con reading could
     move it, those reconciliations would be measuring an assumption.
     """
@@ -1213,7 +1215,7 @@ def test_seven_node_totals_are_provably_blind_to_the_aircon_reading(day):
                      ("battery_in", lambda f: inbound(f, "battery")),
                      ("inverter", lambda f: inbound(f, "inverter")),
                      ("tesla", lambda f: inbound(f, "tesla")),
-                     ("house_and_aircon", lambda f: inbound(f, "house")
+                     ("house_and_aircon_fridge", lambda f: inbound(f, "house")
                       + inbound(f, "aircon"))):
         assert abs(fn(truth) - fn(loud)) < 1e-9, (
             "%s: %s moves by %.6f kWh when the air-con channel is forced to the "
@@ -1534,7 +1536,7 @@ def _report():
             ("Battery in", n["battery_in"], counter(day, "battery_charge")),
             ("House (in)", n["house"], None),
             ("Air con (in)", n["aircon"], None),
-            ("House+Air con (in)", n["house_and_aircon"],
+            ("House+Air con+Fridge (in)", n["house_and_aircon_fridge"],
              None if blind else counter(day, "house") - tesla_counter_kwh(day)),
             ("Tesla (in)", n["tesla"], None if blind else tesla_counter_kwh(day)),
             ("Inverter (in)", n["inverter"], None),
@@ -1551,7 +1553,7 @@ def _report():
         print("  supply %.3f kWh   house_load %.3f   house-minus-car %s   "
               "tesla %s" % (
                   r["raw"]["supply"], r["raw"]["house"],
-                  "n/a" if blind else "%.3f" % r["raw"]["house_and_aircon"],
+                  "n/a" if blind else "%.3f" % r["raw"]["house_and_aircon_fridge"],
                   "n/a" if blind else "%.3f" % r["raw"]["tesla"]))
         print("  aircon held at 0 W for %.0f s of %.0f live s"
               % (r["aircon_assumed_s"], r["live_s"]))

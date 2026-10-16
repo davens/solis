@@ -3,7 +3,7 @@
 Three things are checked, in this order, because each is only meaningful if the
 previous one holds:
 
-  1. The YAML is well formed: fifteen sensors, one byte-identical preamble, one
+  1. The YAML is well formed: eighteen sensors, one byte-identical preamble, one
      availability template, the expected unique_ids -- and it is not stale with
      respect to its own generator, gen_flow_yaml_v2.py.
   2. The Jinja agrees with a literal transcription of the model (`spec_flows`
@@ -18,26 +18,25 @@ that only asserts what the implementation says cannot fail. `spec_flows` and
 `unclamped_residual` are therefore transcriptions BY HAND and must never call
 flows.py, however tempting the deduplication looks.
 
-The transcription's source is BRIEF_V2.md section 2 for the twelve original
-flows. The brief predates the air-con node and has NOT been rewritten, so the
-three air-con flows are transcribed from the model block in
-_flow_yaml_header.txt instead -- the same six lines the generator emits:
+The independent transcription follows BRIEF_V2.md section 2 and the model
+block in _flow_yaml_header.txt, including the appliance carve-out order:
 
-    T  = min(max(0, tesla), H)      A  = min(max(0, aircon), H - T)
-    Hr = max(0, H - T - A)
-    L  = max(0, (S + B + G) - (Hr + T + A + C + E))
+    T  = min(max(0, tesla), H)
+    F  = min(max(0, fridge), H - T)
+    A  = min(max(0, aircon), H - T - F)
+    Hr = max(0, H - T - F - A)
+    L  = max(0, (S + B + G) - (Hr + T + A + F + C + E))
 
 THE AIR CON IS THE ODD CHANNEL, IN TWO WAYS, AND BOTH ARE PINNED HERE.
 
-  * It is read with `| float(0)` -- the only channel carrying a default -- and
+  * It is read with `| float(0)` -- alongside fridge, an optional channel carrying a default -- and
     it is deliberately absent from the availability guard, which still counts
-    exactly FIVE entities. `sensor.aircon_power` is a derivative of the LG
-    ThinQ hourly energy counter (lg_thinq publishes no power entity at all), so
-    it reads `unknown` for up to two hours after every restart; guarding on it
-    would blank all fifteen flows for that window, every restart. A missing
+    exactly FIVE entities. `sensor.aircon_power` is a trigger-based template
+    over the LG ThinQ hourly energy counter and restores across restarts.
+    Optional missing readings must not blank all eighteen flows. A missing
     air-con reading must therefore fall back to A = 0, which puts the air con
     back inside Hr -- exactly what this file did before the air-con node
-    existed. Both halves are asserted: a bad air-con reading leaves all fifteen
+    existed. Both halves are asserted: a bad air-con reading leaves all eighteen
     AVAILABLE and equal to aircon = 0, while a bad reading on any of the other
     five still blanks everything.
   * The Tesla is carved out BEFORE the air con, so T never moves when the
@@ -100,33 +99,36 @@ FLOW_KEYS = (
     "solar_to_house",
     "solar_to_tesla",
     "solar_to_aircon",
+    "solar_to_fridge",
     "solar_to_inverter",
     "battery_to_house",
     "battery_to_tesla",
     "battery_to_aircon",
+    "battery_to_fridge",
     "battery_to_inverter",
     "grid_to_house",
     "grid_to_tesla",
     "grid_to_aircon",
+    "grid_to_fridge",
     "grid_to_battery",
     "grid_to_inverter",
 )
-N_FLOWS = 15
+N_FLOWS = 18
 
 # The three flows added when the air-con node landed. Named once, so the tests
 # that care about the split can say which they mean.
 AIRCON_KEYS = ("solar_to_aircon", "battery_to_aircon", "grid_to_aircon")
 
 # Everything the air-con reading must NOT be able to move. The Tesla is carved
-# out of the house load BEFORE the air con, and Hr + T + A == H by
-# construction, so T, C, E and L are all blind to `aircon`. This list is the
+# out of the house load BEFORE the air con, and Hr + T + F + A == H by
+# construction, so T, F, C, E and L are all blind to `aircon`. This list is the
 # test's own statement of that, and it matches flows.DEPENDS_ON without
 # importing it.
 AIRCON_BLIND_KEYS = tuple(k for k in FLOW_KEYS
                           if k.endswith(("_to_tesla", "_to_battery",
-                                         "_to_export", "_to_inverter")))
+                                         "_to_export", "_to_inverter", "_to_fridge")))
 
-# flows.py key -> v2-layout's entity slug. They differ for one of the fifteen
+# flows.py key -> v2-layout's entity slug. They differ for one of the eighteen
 # because v2-layout names a sink after its NODE: `grid` as a sink is EXPORT,
 # `battery` as a sink is CHARGE. Keeping both vocabularies explicit is the
 # point -- an implicit mapping is what drifts.
@@ -136,14 +138,17 @@ SLUG = {
     "solar_to_house": "solar_to_house",
     "solar_to_tesla": "solar_to_tesla",
     "solar_to_aircon": "solar_to_aircon",
+    "solar_to_fridge": "solar_to_fridge",
     "solar_to_inverter": "solar_to_inverter",
     "battery_to_house": "battery_to_house",
     "battery_to_tesla": "battery_to_tesla",
     "battery_to_aircon": "battery_to_aircon",
+    "battery_to_fridge": "battery_to_fridge",
     "battery_to_inverter": "battery_to_inverter",
     "grid_to_house": "grid_to_house",
     "grid_to_tesla": "grid_to_tesla",
     "grid_to_aircon": "grid_to_aircon",
+    "grid_to_fridge": "grid_to_fridge",
     "grid_to_battery": "grid_to_battery",
     "grid_to_inverter": "grid_to_inverter",
 }
@@ -164,8 +169,10 @@ SRC = {
 # The sixth, unguarded channel.
 AIRCON_ENTITY = "sensor.aircon_power"
 
-# All six entities the preamble reads.
-ALL_ENTITIES = dict(SRC, aircon=AIRCON_ENTITY)
+# All seven entities the preamble reads.
+FRIDGE_ENTITY = "sensor.fridge_power"
+FRIDGE_KEYS = ("solar_to_fridge", "battery_to_fridge", "grid_to_fridge")
+ALL_ENTITIES = dict(SRC, aircon=AIRCON_ENTITY, fridge=FRIDGE_ENTITY)
 
 # What HA hands a template when an entity is missing or its source is broken.
 BAD_STATES = ("unavailable", "unknown", "", "none", "None", "nan", "inf", "-inf",
@@ -179,7 +186,7 @@ BAD_STATES = ("unavailable", "unknown", "", "none", "None", "nan", "inf", "-inf"
 #                     `[ 0, AR ] | max` ordering, since every comparison with
 #                     NaN is False -- 'nan' and '-inf' too.
 #   clamped, not 0    'inf' and an over-range number: AR is a real, enormous
-#                     float, and the `[ AR, H - T ] | min` clamp is the only
+#                     float, and the `[ AR, H - T - F ] | min` clamp is the only
 #                     thing containing it.
 #
 # Kept as two named tuples rather than one because a test that asserted "any
@@ -236,7 +243,7 @@ def ha_float(value, default=_NO_DEFAULT):
         return default
 
 
-# One environment, one mutable state map, so the fifteen templates compile once
+# One environment, one mutable state map, so the eighteen templates compile once
 # instead of once per replayed sample. `states` closes over _STATES by
 # reference, exactly as HA's closes over the live machine state.
 _STATES = {}
@@ -301,8 +308,8 @@ ABSENT = _Absent()
 
 
 def render(templates, availability, solar, battery, grid, house, tesla,
-           aircon=ABSENT):
-    """Render all fifteen. Returns dict, or the string 'unavailable'.
+           aircon=ABSENT, fridge=ABSENT):
+    """Render all eighteen. Returns dict, or the string 'unavailable'.
 
     Mirrors HA: the availability template is evaluated first and a false result
     makes the sensor unavailable without the state template running at all.
@@ -317,6 +324,8 @@ def render(templates, availability, solar, battery, grid, house, tesla,
                     SRC["tesla"]: as_state(tesla)})
     if aircon is not ABSENT:
         _STATES[AIRCON_ENTITY] = as_state(aircon)
+    if fridge is not ABSENT:
+        _STATES[FRIDGE_ENTITY] = as_state(fridge)
     avail = _compile(availability).render().strip()
     assert avail in ("True", "False"), avail
     if avail == "False":
@@ -327,12 +336,11 @@ def render(templates, availability, solar, battery, grid, house, tesla,
 # --------------------------------------------------------------------------
 # The brief, transcribed. Deliberately dumb and literal.
 # --------------------------------------------------------------------------
-def spec_flows(solar, battery, grid, house, tesla, aircon):
+def spec_flows(solar, battery, grid, house, tesla, aircon, fridge=0.0):
     """The model, written out longhand. Watts in, watts out.
 
-    BRIEF_V2.md section 2 for the twelve original flows; the air-con lines are
-    transcribed from the model block in _flow_yaml_header.txt, which the brief
-    predates. THIS MUST NEVER CALL flows.py. It exists so the harness can FAIL
+    BRIEF_V2.md section 2 and _flow_yaml_header.txt specify all eighteen flows.
+    THIS MUST NEVER CALL flows.py. It exists so the harness can FAIL
     flows.py rather than echo it, and the moment it delegates it stops being
     able to fail anything.
 
@@ -348,9 +356,10 @@ def spec_flows(solar, battery, grid, house, tesla, aircon):
     E = max(0.0, -grid)
     H = max(0.0, house)
     T = min(max(0.0, tesla), H)          # clamp: Tesla cannot exceed house load
-    A = min(max(0.0, aircon), H - T)     # air con gets what the Tesla left
-    Hr = max(0.0, H - T - A)
-    L = max(0.0, (S + B + G) - (Hr + T + A + C + E))
+    F = min(max(0.0, fridge), H - T)
+    A = min(max(0.0, aircon), H - T - F)
+    Hr = max(0.0, H - T - F - A)
+    L = max(0.0, (S + B + G) - (Hr + T + A + F + C + E))
 
     s2e = min(S, E)                       # export is structurally solar-only
     S1 = S - s2e
@@ -366,14 +375,17 @@ def spec_flows(solar, battery, grid, house, tesla, aircon):
         "solar_to_house": Hr * w,
         "solar_to_tesla": T * w,
         "solar_to_aircon": A * w,
+        "solar_to_fridge": F * w,
         "solar_to_inverter": L * w,
         "battery_to_house": Hr * b,
         "battery_to_tesla": T * b,
         "battery_to_aircon": A * b,
+        "battery_to_fridge": F * b,
         "battery_to_inverter": L * b,
         "grid_to_house": Hr * g,
         "grid_to_tesla": T * g,
         "grid_to_aircon": A * g,
+        "grid_to_fridge": F * g,
         "grid_to_battery": C * g,
         "grid_to_inverter": L * g,
     }
@@ -485,7 +497,7 @@ def _doc():
 
 @pytest.fixture(scope="session")
 def sensors(_doc):
-    """The fifteen POWER templates. There is no second group -- see below."""
+    """The eighteen POWER templates. There is no second group -- see below."""
     assert len(_doc["template"]) == 1, "the fourth wrapper stage was cancelled"
     return _doc["template"][0]["sensor"]
 
@@ -510,7 +522,7 @@ def availability(sensors):
 # ======================================================================
 # 1. the YAML itself
 # ======================================================================
-def test_fifteen_sensors_with_the_expected_keys(templates):
+def test_eighteen_sensors_with_the_expected_keys(templates):
     assert tuple(templates) == FLOW_KEYS
     assert len(templates) == N_FLOWS
 
@@ -531,7 +543,7 @@ def test_the_yaml_document_order_is_the_canonical_flow_order(sensors):
 def test_the_yaml_is_not_stale_with_respect_to_its_generator():
     """flow_sensors_v2.yaml is GENERATED, and a hand-edit is the failure mode.
 
-    The preamble is repeated verbatim fifteen times, so editing one copy by
+    The preamble is repeated verbatim eighteen times, so editing one copy by
     hand is easy and produces a file that no longer matches its own generator.
     `--check` re-renders and compares, exiting 1 when they differ. Running it
     here means the byte-identical-preamble assertions below are backed by the
@@ -543,7 +555,7 @@ def test_the_yaml_is_not_stale_with_respect_to_its_generator():
 
 
 def test_the_slug_map_matches_v2_layouts_hard_coded_entity_names(sensors):
-    """v2-layout hard-codes these fifteen in layout_v2.flow_meter().
+    """v2-layout hard-codes these eighteen in layout_v2.flow_meter().
 
     Its vocabulary names a sink after its NODE, so `grid` as a sink is export
     and `battery` as a sink is charge. If this list and its list disagree, the
@@ -558,10 +570,10 @@ def test_the_slug_map_matches_v2_layouts_hard_coded_entity_names(sensors):
     """
     expected = {
         "flow_solar_to_grid", "flow_solar_to_battery", "flow_solar_to_house",
-        "flow_solar_to_tesla", "flow_solar_to_aircon", "flow_solar_to_inverter",
+        "flow_solar_to_tesla", "flow_solar_to_aircon", "flow_solar_to_fridge", "flow_solar_to_inverter",
         "flow_battery_to_house", "flow_battery_to_tesla",
-        "flow_battery_to_aircon", "flow_battery_to_inverter",
-        "flow_grid_to_house", "flow_grid_to_tesla", "flow_grid_to_aircon",
+        "flow_battery_to_aircon", "flow_battery_to_fridge", "flow_battery_to_inverter",
+        "flow_grid_to_house", "flow_grid_to_tesla", "flow_grid_to_aircon", "flow_grid_to_fridge",
         "flow_grid_to_battery", "flow_grid_to_inverter",
     }
     assert {"flow_" + s for s in SLUG.values()} == expected
@@ -583,7 +595,7 @@ def test_the_entity_names_agree_with_layout_v2_itself(sensors):
     assert len(layout_v2.FLOW_METERS) == N_FLOWS
 
 
-def test_slug_map_is_a_bijection_over_the_fifteen_flows():
+def test_slug_map_is_a_bijection_over_the_eighteen_flows():
     assert set(SLUG) == set(FLOW_KEYS)
     assert len(set(SLUG.values())) == N_FLOWS
 
@@ -602,7 +614,7 @@ def test_the_three_aircon_flows_are_present_and_named_consistently():
 
 
 @needs_impl
-def test_flows_py_exports_exactly_these_fifteen_keys():
+def test_flows_py_exports_exactly_these_eighteen_keys():
     """Import the tuple rather than trusting two hand-written lists to agree."""
     import flows
     assert set(flows.FLOWS) == set(FLOW_KEYS)
@@ -618,18 +630,18 @@ def test_every_sensor_declares_power_watts_measurement(sensors):
         assert s["name"].endswith(" power"), s["name"]
 
 
-def test_all_fifteen_preambles_are_byte_identical(templates):
+def test_all_eighteen_preambles_are_byte_identical(templates):
     pres = {t[:t.rindex("{{")] for t in templates.values()}
     assert len(pres) == 1, "the shared preamble drifted; regenerate the YAML"
 
 
-def test_all_fifteen_share_one_availability_template(sensors):
+def test_all_eighteen_share_one_availability_template(sensors):
     assert len({s["availability"] for s in sensors}) == 1
     assert len(sensors) == N_FLOWS
 
 
-def test_preamble_reads_exactly_the_six_declared_sources(templates):
-    """Five guarded channels plus the air con. Six `states(` calls, no more.
+def test_preamble_reads_exactly_the_seven_declared_sources(templates):
+    """Five guarded channels plus Air con and Fridge. Seven `states(` calls.
 
     The count is the point: an extra `states(` would mean the preamble had
     grown a reading nothing here knows about, and a missing one would mean a
@@ -638,21 +650,16 @@ def test_preamble_reads_exactly_the_six_declared_sources(templates):
     body = next(iter(templates.values()))
     for eid in ALL_ENTITIES.values():
         assert body.count("'%s'" % eid) == 1, eid
-    assert body.count("states(") == len(ALL_ENTITIES) == 6
+    assert body.count("states(") == len(ALL_ENTITIES) == 7
 
 
-def test_only_the_aircon_reading_carries_a_float_default(templates):
-    """`| float` with no default is what makes a dropout blank the sensor.
+def test_only_aircon_and_fridge_readings_carry_a_float_default(templates):
+    """Only Air con and Fridge can fall back inside House when unreadable.
 
-    Exactly one channel is allowed to opt out of that, and it is the air con:
-    it is a derivative of an hourly LG counter and reads `unknown` for up to
-    two hours after every restart, so guarding on it would blank all fifteen
-    flows for that window every time HA comes back. Every OTHER channel
-    carrying a default would be the `| float(0)` trap -- a dropout banked as
-    real zero energy by the Riemann integral downstream.
+    The five guarded channels retain strict float reads with no defaults.
     """
     body = next(iter(templates.values()))
-    assert body.count("| float(0)") == 1
+    assert body.count("| float(0)") == 2
     # The YAML block scalar is folded (`>`), so the preamble arrives as ONE
     # line and splitlines() would return the whole template. Split on the
     # `{% set ... %}` statements instead -- that is the unit a default belongs
@@ -662,6 +669,9 @@ def test_only_the_aircon_reading_carries_a_float_default(templates):
     aircon_stmt = [s for s in stmts if AIRCON_ENTITY in s]
     assert len(aircon_stmt) == 1, aircon_stmt
     assert "| float(0)" in aircon_stmt[0]
+    fridge_stmt = [s for s in stmts if FRIDGE_ENTITY in s]
+    assert len(fridge_stmt) == 1
+    assert "| float(0)" in fridge_stmt[0]
     for name, eid in SRC.items():
         stmt = [s for s in stmts if eid in s]
         assert len(stmt) == 1, (name, stmt)
@@ -676,6 +686,7 @@ def test_the_availability_guard_does_not_mention_the_air_con(availability):
     inverter being unreachable and would be diagnosed as a network fault.
     """
     assert AIRCON_ENTITY not in availability
+    assert FRIDGE_ENTITY not in availability
     assert availability.count("sensor.") == len(SRC) == 5
     for eid in SRC.values():
         assert eid in availability
@@ -877,7 +888,8 @@ def test_aircon_is_carved_out_of_the_house_remainder(templates, availability):
 
 
 def test_aircon_is_clamped_to_what_the_tesla_left(templates, availability):
-    """A = min(AR, H - T), NOT min(AR, H). The Tesla is carved out first.
+    """A = min(AR, H - T - F), NOT min(AR, H). The Tesla is carved out first
+    (and the fridge, absent here, second).
 
     Without the `H - T` cap a car charging at 7 kW inside a 7.3 kW house plus a
     2 kW air-con reading would drive Hr negative, and the clamp at zero would
@@ -957,7 +969,7 @@ def test_changing_the_aircon_reading_moves_only_the_house_split(
     always did. If this ever weakened to approximate equality, that licence
     would quietly go with it.
 
-    Exact equality is safe here because Hr + T + A == H by construction, so L
+    Exact equality is safe here because Hr + T + F + A == H by construction, so L
     reads the house load whole and never one of its parts.
     """
     s, b, g, h, t = base
@@ -974,10 +986,10 @@ def test_changing_the_aircon_reading_moves_only_the_house_split(
 
 def test_the_aircon_blind_key_list_is_the_whole_graph_minus_the_house_split():
     """Guards the list above: it must be derived, not a stale hand-copy."""
-    assert set(AIRCON_BLIND_KEYS) | set(AIRCON_KEYS) | {
+    assert set(AIRCON_BLIND_KEYS) | set(AIRCON_KEYS) | set(FRIDGE_KEYS) | {
         "solar_to_house", "battery_to_house", "grid_to_house"} == set(FLOW_KEYS)
     assert not set(AIRCON_BLIND_KEYS) & set(AIRCON_KEYS)
-    assert len(AIRCON_BLIND_KEYS) == 9
+    assert len(AIRCON_BLIND_KEYS) == 12
 
 
 def test_battery_sign_splits_charge_from_discharge(templates, availability):
@@ -1115,7 +1127,7 @@ def test_battery_cannot_charge_and_discharge_in_one_sample(templates, availabili
 # ======================================================================
 @pytest.mark.parametrize("channel", sorted(SRC))
 @pytest.mark.parametrize("bad", BAD_STATES)
-def test_any_bad_guarded_source_makes_all_fifteen_unavailable(
+def test_any_bad_guarded_source_makes_all_eighteen_unavailable(
         templates, availability, channel, bad):
     """The FIVE guarded channels. The air con is the documented exception."""
     kwargs = {"solar": 1000, "battery": -500, "grid": 200, "house": 1500, "tesla": 0}
@@ -1126,7 +1138,7 @@ def test_any_bad_guarded_source_makes_all_fifteen_unavailable(
 
 
 @pytest.mark.parametrize("channel", sorted(SRC))
-def test_a_none_source_makes_all_fifteen_unavailable(templates, availability, channel):
+def test_a_none_source_makes_all_eighteen_unavailable(templates, availability, channel):
     kwargs = {"solar": 1000, "battery": -500, "grid": 200, "house": 1500, "tesla": 0}
     kwargs[channel] = None
     assert render(templates, availability, **kwargs) == "unavailable"
@@ -1134,16 +1146,12 @@ def test_a_none_source_makes_all_fifteen_unavailable(templates, availability, ch
 
 # ------------------------------------------------- the air con, the other way
 @pytest.mark.parametrize("bad", AIRCON_FALLS_BACK_TO_ZERO + AIRCON_CLAMPED_NOT_ZERO)
-def test_a_bad_aircon_reading_leaves_all_fifteen_available(
+def test_a_bad_aircon_reading_leaves_all_eighteen_available(
         templates, availability, bad):
     """The opposite of the rule above, and it is deliberate.
 
-    `sensor.aircon_power` is a derivative of the LG ThinQ hourly energy counter
-    -- lg_thinq publishes no power entity at all -- so it reads `unknown` for
-    up to two hours after every restart while the derivative waits for its
-    second sample. Guarding on it would blank all fifteen flows for that whole
-    window, every restart, and that would look exactly like the inverter being
-    unreachable.
+    The trigger-based air-con template restores across restarts, but a
+    missing optional reading must still leave the rest of the chart available.
 
     So a bad air-con reading must fall back to A = 0 and keep going. Nothing is
     fabricated by that: the air con folds back into Hr, the house total stays
@@ -1161,7 +1169,7 @@ def test_a_bad_aircon_reading_renders_exactly_as_aircon_zero(
         templates, availability, bad):
     """Available is not enough: it must be available and RIGHT.
 
-    An unparseable air-con reading has to produce the same fifteen numbers an
+    An unparseable air-con reading has to produce the same eighteen numbers an
     explicit 0 W produces, and those have to match the transcribed spec at
     aircon = 0. Otherwise the fallback would be available and wrong, which is
     worse than unavailable.
@@ -1184,7 +1192,7 @@ def test_a_huge_aircon_reading_clamps_to_the_house_rather_than_falling_to_zero(
 
     `| float(0)` only defaults when the text cannot be parsed. `'inf'` parses,
     and so does `'100000.5'`, so AR is a real (enormous) number and the
-    `[ AR, H - T ] | min` clamp is what contains it -- the whole house
+    `[ AR, H - T - F ] | min` clamp is what contains it -- the whole house
     remainder is attributed to the air con and Hr goes to zero.
 
     Written down because the natural summary of this channel, "a bad air-con
@@ -1205,7 +1213,7 @@ def test_a_huge_aircon_reading_clamps_to_the_house_rather_than_falling_to_zero(
     assert got == render(templates, availability, aircon=1500, **kwargs)
 
 
-def test_a_missing_aircon_entity_is_the_restart_case_and_is_survivable(
+def test_a_missing_aircon_entity_is_survivable(
         templates, availability):
     """ABSENT is not a bad string: HA returns 'unknown' for an unknown entity.
 
@@ -1370,16 +1378,16 @@ def test_the_aircon_channel_is_where_jinja_and_flows_py_deliberately_diverge(
     BadReading for a non-number, NaN, inf, or a magnitude past
     MAX_PLAUSIBLE_W. The Jinja cannot do the same without putting the air con
     into the availability guard, and putting it there is exactly what must not
-    happen -- it would blank all fifteen flows for the first hour or two after
+    happen -- it would blank all eighteen flows for the first hour or two after
     every restart, for a channel that only ever affects the House / Air con
     split.
 
     So on this one channel the two sides disagree by construction:
 
         flows.py   raises BadReading, caller reports nothing
-        Jinja      renders all fifteen, with A falling back to 0 or clamped
+        Jinja      renders all eighteen, with A falling back to 0 or clamped
 
-    The Jinja side is bounded and safe: A = min(max(0, AR), H - T), so even a
+    The Jinja side is bounded and safe: A = min(max(0, AR), H - T - F), so even a
     100 kW misread can only move the House / Air con split, never the house
     total, never the Tesla, battery, export or inverter ribbons, and never the
     energy the meters integrate. That containment is the reason the divergence
@@ -1468,7 +1476,7 @@ def test_fixtures_contain_real_car_charging_on_at_least_two_days():
 @pytest.mark.parametrize("day", DAYS)
 def test_jinja_matches_the_brief_on_every_replayed_sample(
         templates, availability, day):
-    """Every 10th live sample of the day, all fifteen flows, < 1e-4 W.
+    """Every 10th live sample of the day, all eighteen flows, < 1e-4 W.
 
     THE AIR-CON ENTITY IS ABSENT HERE, and that is not a shortcut. None of the
     four recorded days has an air-con series -- the channel did not exist when
@@ -1594,11 +1602,11 @@ def test_replayed_samples_cover_more_than_one_regime(day):
 def source_totals(f):
     return {
         "solar": (f["solar_to_export"] + f["solar_to_battery"] + f["solar_to_house"]
-                  + f["solar_to_tesla"] + f["solar_to_aircon"]
+                  + f["solar_to_tesla"] + f["solar_to_aircon"] + f["solar_to_fridge"]
                   + f["solar_to_inverter"]),
         "battery_out": (f["battery_to_house"] + f["battery_to_tesla"]
-                        + f["battery_to_aircon"] + f["battery_to_inverter"]),
-        "grid_in": (f["grid_to_house"] + f["grid_to_tesla"] + f["grid_to_aircon"]
+                        + f["battery_to_aircon"] + f["battery_to_fridge"] + f["battery_to_inverter"]),
+        "grid_in": (f["grid_to_house"] + f["grid_to_tesla"] + f["grid_to_aircon"] + f["grid_to_fridge"]
                     + f["grid_to_battery"] + f["grid_to_inverter"]),
     }
 
@@ -1609,6 +1617,7 @@ def sink_totals(f):
         "tesla": f["solar_to_tesla"] + f["battery_to_tesla"] + f["grid_to_tesla"],
         "aircon": (f["solar_to_aircon"] + f["battery_to_aircon"]
                    + f["grid_to_aircon"]),
+        "fridge": sum(f[k] for k in FRIDGE_KEYS),
         "battery_in": f["solar_to_battery"] + f["grid_to_battery"],
         "export": f["solar_to_export"],
         "inverter": (f["solar_to_inverter"] + f["battery_to_inverter"]
@@ -1619,7 +1628,7 @@ def sink_totals(f):
 def unclamped_residual(solar, battery, grid, house, tesla, aircon):
     """Hand-transcribed, like spec_flows, and for the same reason.
 
-    Note that Hr + T + A == H whenever both clamps hold, so the air con cannot
+    Note that Hr + T + F + A == H whenever both clamps hold, so the air con cannot
     change this number -- but it is written out in full anyway rather than
     dropped as "provably irrelevant", because that provability is a property of
     the current clamps and a test must not assume the thing it checks.
@@ -1627,7 +1636,7 @@ def unclamped_residual(solar, battery, grid, house, tesla, aircon):
     S, B, C = max(0.0, solar), max(0.0, -battery), max(0.0, battery)
     G, E, H = max(0.0, grid), max(0.0, -grid), max(0.0, house)
     T = min(max(0.0, tesla), H)
-    A = min(max(0.0, aircon), H - T)
+    A = min(max(0.0, aircon), H - T)   # the fridge is absent here, so F = 0
     return (S + B + G) - (max(0.0, H - T - A) + T + A + C + E)
 
 
@@ -1667,7 +1676,7 @@ def test_every_sink_fills_exactly_when_the_residual_is_non_negative(
             G, C = max(0.0, args[2]), max(0.0, args[1])
             E, H = max(0.0, -args[2]), max(0.0, args[3])
             T = min(max(0.0, args[4]), H)
-            A = min(max(0.0, aircon), H - T)
+            A = min(max(0.0, aircon), H - T)   # the fridge is absent here, so F = 0
             assert st["house"] == pytest.approx(max(0.0, H - T - A), abs=1e-3)
             assert st["tesla"] == pytest.approx(T, abs=1e-3)
             assert st["aircon"] == pytest.approx(A, abs=1e-3)
@@ -1764,7 +1773,7 @@ def test_both_conservation_holes_are_rare_and_small(day):
         total_s += dt
         S, E = max(0.0, v["solar"]), max(0.0, -v["grid"])
         # aircon = 0: these four days have no air-con series, and A cannot
-        # move this residual anyway (Hr + T + A == H), so the measured
+        # move this residual anyway (Hr + T + F + A == H), so the measured
         # percentages below stay comparable to the ones recorded above.
         r = unclamped_residual(v["solar"], v["battery"], v["grid"],
                                v["house"], v["tesla"], 0.0)
