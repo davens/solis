@@ -363,6 +363,9 @@ test('today: rooms line, extras, and run strips from history', async () => {
       'climate.heat': [{ s: 'heat', a: { hvac_action: 'idle' }, lu: at(0, 0) }, { s: 'heat', a: { hvac_action: 'heating' }, lu: at(6, 0) },
         { s: 'heat', a: { hvac_action: 'idle' }, lu: at(7, 30) }, { s: 'heat', a: { hvac_action: 'heating' }, lu: at(12, 30) },
         { s: 'heat', a: { hvac_action: 'idle' }, lu: at(13, 0) }],
+      // Hot water 05:30-06:15, overlapping the heating's start by a quarter of an hour.
+      'water_heater.hw': [{ s: 'schedule', a: { hot_water_schedule_active: false }, lu: at(0, 0) },
+        { s: 'boost_30m', a: { hot_water_schedule_active: true }, lu: at(5, 30) }, { s: 'schedule', a: { hot_water_schedule_active: false }, lu: at(6, 15) }],
       // The LG counter updates hourly at :49: ~200 Wh an hour while working, 11 Wh on standby; yesterday's total at midnight.
       'sensor.ace': [[0, 0, '1605'], [0, 49, '152'], [1, 49, '346'], [2, 49, 'unavailable'], [3, 49, '760'], [4, 49, '960'], [5, 49, '1169'],
         [6, 49, '1385'], [7, 49, '1600'], [8, 49, '1820'], [9, 49, '2027'], [10, 49, '2175'], [11, 49, '2186'], [12, 49, '2197']]
@@ -374,7 +377,8 @@ test('today: rooms line, extras, and run strips from history', async () => {
   const h = w.html();
   assert.ok(h.includes('Bedroom 21&#176;') && !h.includes('Nursery'), 'rooms line skips an unavailable sensor');
   assert.ok(h.includes('Outside 18&#176; &#183; Humidity 55%'), 'extras read weather temperature and % sensors');
-  assert.ok(h.includes('Ran 2&#160;h today'), 'heating counts hvac_action heating only');
+  assert.ok(/Heating 2&#160;h &#183; <span[^>]*><\/span>Water 45&#160;min today/.test(h), 'heating counts hvac_action heating only; water its schedule flag');
+  assert.strictEqual((h.match(/background:linear-gradient\(/g) || []).length, 1, 'the overlap is one split span');
   assert.ok(h.includes('Working 10&#160;h 49&#160;min today &#183; 2.2&#160;kWh'), 'air con counts hours above standby from its energy counter');
   assert.strictEqual((h.match(/background:#F2C230"><\/b>/g) || []).length, 1, 'one merged working span, standby hours left empty');
   assert.strictEqual(w.ws.length, 1);
@@ -383,6 +387,35 @@ test('today: rooms line, extras, and run strips from history', async () => {
   assert.strictEqual(w.ws.length, 1, 'no refetch inside five minutes');
   await w.advance(300000);
   assert.strictEqual(w.ws.length, 2, 'refetched after five minutes');
+});
+
+test('bands: the fridge off, offline or stalled outranks the garage; no fridge key means no band', async () => {
+  const T = new RealDate(2026, 9, 2, 14, 32).getTime(), ago = m => new RealDate(T - m * 60000).toISOString();
+  const states = { 'switch.f': { state: 'off', last_changed: ago(7), attributes: {} }, 'binary_sensor.g': { state: 'on', last_changed: ago(0), attributes: {} } };
+  states['binary_sensor.fs'] = { state: 'off', attributes: {} };
+  const w = world({ states, config: { fridge: 'switch.f', fridge_stalled: 'binary_sensor.fs', garage: 'binary_sensor.g' } });
+  await w.advance(0);
+  assert.ok(w.html().includes('The fridge is off.') && !w.html().includes('The garage is open.'));
+  w.update({ 'switch.f': { state: 'unavailable', last_changed: ago(9) } });
+  assert.ok(!w.html().includes('fridge') && w.html().includes('The garage is open.'), 'offline waits 10 minutes');
+  w.update({ 'switch.f': { state: 'unavailable', last_changed: ago(150) } });
+  assert.ok(w.html().includes('The fridge plug is offline.') && w.html().includes('hours offline'));
+  w.update({ 'switch.f': { state: 'on' } });
+  assert.ok(!w.html().includes('fridge') && w.html().includes('The garage is open.'));
+  w.update({ 'binary_sensor.fs': { state: 'on', last_changed: ago(0) } });
+  assert.ok(w.html().includes('The fridge has stopped.'), 'stalled: plug on, no draw');
+  const plain = world({ states: { 'switch.f': { state: 'off', attributes: {} } } });
+  await plain.advance(0);
+  assert.ok(!plain.html().includes('fridge'), 'not configured, not shown');
+});
+
+test('today: without a hot water entity the heating strip keeps its plain label', async () => {
+  const at = (h, m) => new RealDate(2026, 9, 2, h, m).getTime() / 1000;
+  const w = world({ config: { hot_water: undefined },
+    history: { 'climate.heat': [{ s: 'heat', a: { hvac_action: 'heating' }, lu: at(6, 0) }, { s: 'heat', a: { hvac_action: 'idle' }, lu: at(7, 0) }] } });
+  await w.advance(0);
+  w.card._render(true);
+  assert.ok(w.html().includes('Ran 1&#160;h today') && !w.html().includes('Water'));
 });
 
 test('today: no history means no strip, and a failed fetch is not retried on every render', async () => {

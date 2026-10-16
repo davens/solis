@@ -4,6 +4,8 @@
   "battery": "sensor.<inverter>_battery",
   "kiln_warning": "binary_sensor.kiln_warning_outstanding",
   "kiln_firing": "binary_sensor.kiln_firing",
+  "fridge": "switch.<fridge_plug>",
+  "fridge_stalled": "binary_sensor.<fridge>_stalled",
   "evening_gap": "sensor.energy_ping_evening_gap",
   "low_power": "binary_sensor.energy_ping_low_power",
   "ping_morning": "input_datetime.energy_ping_last",

@@ -8,6 +8,8 @@
 //   battery: sensor.<inverter>_battery            house battery SOC %
 //   kiln_warning: binary_sensor.kiln_warning_outstanding
 //   kiln_firing: binary_sensor.kiln_firing
+//   fridge: switch.<fridge_plug>                  the fridge's smart plug; off or offline raises the top band
+//   fridge_stalled: binary_sensor.<fridge>_stalled   on = plug on but no power drawn for longer than a normal compressor gap
 //   evening_gap: sensor.energy_ping_evening_gap   > 0 means the battery will not last to 23:30; shown as kWh short
 //   low_power: binary_sensor.energy_ping_low_power   evening_gap held above 0 for 7.5 min (the phone ping waits 15)
 //   ping_morning: input_datetime.energy_ping_last  when the 09:00 phone ping last went out
@@ -18,7 +20,7 @@
 //   garage: binary_sensor.garage_door             on = open (read-only: there is no garage control)
 //   weather: weather.<home>
 //   heating: climate.<thermostat>
-//   hot_water: water_heater.<boiler>
+//   hot_water: water_heater.<boiler>             its hot_water_schedule_active attribute draws the water runs on the heating strip
 //   aircon: climate.<aircon>
 //   aircon_room: Living room
 //   aircon_energy: sensor.<aircon>_energy_today   daily Wh/kWh counter; its history shows when the air con was working
@@ -52,12 +54,12 @@
 // Under each reading, a strip shows when it ran since midnight, read from HA history.
 // The air con reports only its mode, so its strip comes from its energy counter: standby uses ~11 Wh an hour.
 // Long-press the clock to open the dashboard with ?disable_km, which brings HA's top bar back for that visit.
-// Bands, most urgent first: the garage open; the car charging off the house battery (beyond 1 kW, outside
+// Bands, most urgent first: the fridge off, its plug offline, or stalled (red, above everything); the garage open; the car charging off the house battery (beyond 1 kW, outside
 // 23:30-05:30); the kiln firing; low power from 07:00 to 22:00 (low_power: the phone ping's rule,
 // held 7.5 minutes so a kettle does not raise it).
 // The dishwasher speaks in the battery's note line, never the band: running, waiting for a delayed start, or finished
 // (for an hour, until the door opens). It outranks every other note, red ones included.
-// Add #kiosk-demo=garage|car-battery|kiln|kiln-warning|low-power to the URL to preview a band without the real event.
+// Add #kiosk-demo=fridge|fridge-offline|fridge-stalled|garage|car-battery|kiln|kiln-warning|low-power to the URL to preview a band without the real event.
 // Look: theme_entity (e.g. input_select.kiosk_theme with options Classic / Walala) picks it live; if that is missing or names
 // no known look, theme: classic | walala; default classic. #kiosk-theme=walala in the URL previews a look and beats both.
 
@@ -67,6 +69,12 @@ const HOT_WATER = [['off', 'Off'], ['schedule', 'Schedule'], ['boost_30m', 'Boos
 const AIRCON = [['off', 'Off'], ['heat', 'Heat'], ['cool', 'Cool'], ['auto', 'Auto'], ['dry', 'Dry'], ['fan_only', 'Fan']];
 const WEATHER = { 'clear-night': 'Clear', cloudy: 'Cloudy', exceptional: 'Unusual weather', fog: 'Foggy', hail: 'Hail', lightning: 'Thunder', 'lightning-rainy': 'Thunder and rain', partlycloudy: 'Partly cloudy', pouring: 'Heavy rain', rainy: 'Rain', snowy: 'Snow', 'snowy-rainy': 'Sleet', sunny: 'Sunny', windy: 'Windy', 'windy-variant': 'Windy' };
 const DEAD = ['unavailable', 'unknown'];
+// The fridge band by cause: headline, what to do, and what the count measures.
+const FRIDGE = {
+  off: ['The fridge is off.', 'Switch its plug back on.', 'off'],
+  offline: ['The fridge plug is offline.', 'Check the fridge is running.', 'offline'],
+  stalled: ['The fridge has stopped.', 'Its plug is on but it is using no power. Check it.', 'flagged'],
+};
 // Home Connect programme keys, as HA's select options end them, in the words on the machine.
 const DISH_PROGRAMMES = { auto_1: 'Auto 35–45°', auto_2: 'Auto 45–65°', auto_3: 'Auto 65–75°', eco_50: 'Eco 50°', quick_45: 'Quick 45°', quick_65: 'Quick 65°',
   intensiv_70: 'Intensive 70°', intensiv_45: 'Intensive 45°', intensiv_power: 'Intensive', normal_45: 'Normal 45°', normal_65: 'Normal 65°', glas_40: 'Glass 40°',
@@ -94,8 +102,8 @@ const carIcons = (fg, hi, bolt) => ({
 const W = { paper: '#F3ECDD', ink: '#161616', grey: '#45443F', blue: '#2347C5', pink: '#FF5CB0', orange: '#FF8A2A', mint: '#7FE3C6', yellow: '#FFD21F', warn: '#D3261A' };
 // The colours each look writes into its markup (backgrounds and text set per panel, band and run strip).
 const LOOKS = {
-  classic: { icons: carIcons('#fff', C.yellow, `fill="${C.yellow}"`), bandH: 230, heatIcon: '#fff', lightsIcon: C.red, heat: C.red, heatFg: '#fff', heatRun: '#fff', ac: C.ink, acRun: C.yellow, car: C.blue, carFg: '#fff', caution: C.caution, cautionFg: '#fff', warn: C.warn, dish: '#0F6E64' },
-  walala: { icons: carIcons(W.ink, W.ink, `fill="${W.yellow}" stroke="${W.ink}" stroke-width="1.5" stroke-linejoin="round"`), bandH: 196, heatIcon: W.orange, lightsIcon: W.blue, heat: W.orange, heatFg: W.ink, heatRun: W.ink, ac: W.blue, acRun: W.yellow, car: W.pink, carFg: W.ink, caution: W.yellow, cautionFg: W.ink, warn: W.warn, dish: '#0F6E64', dishFg: '#fff' },
+  classic: { icons: carIcons('#fff', C.yellow, `fill="${C.yellow}"`), bandH: 230, heatIcon: '#fff', lightsIcon: C.red, heat: C.red, heatFg: '#fff', heatRun: '#fff', waterRun: '#8FD6FF', ac: C.ink, acRun: C.yellow, car: C.blue, carFg: '#fff', caution: C.caution, cautionFg: '#fff', warn: C.warn, dish: '#0F6E64' },
+  walala: { icons: carIcons(W.ink, W.ink, `fill="${W.yellow}" stroke="${W.ink}" stroke-width="1.5" stroke-linejoin="round"`), bandH: 196, heatIcon: W.orange, lightsIcon: W.blue, heat: W.orange, heatFg: W.ink, heatRun: W.ink, waterRun: W.blue, ac: W.blue, acRun: W.yellow, car: W.pink, carFg: W.ink, caution: W.yellow, cautionFg: W.ink, warn: W.warn, dish: '#0F6E64', dishFg: '#fff' },
 };
 
 const esc = s => String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
@@ -247,6 +255,22 @@ class HomeKioskCard extends HTMLElement {
 
   _band() {
     const demo = this._demo();
+    const f = this._s(this._cfg.fridge), st = this._s(this._cfg.fridge_stalled);
+    const since = e => Math.max(0, Math.floor((Date.now() - Date.parse(e.last_changed)) / 60000));
+    const fdemo = { fridge: 'off', 'fridge-offline': 'offline', 'fridge-stalled': 'stalled' }[demo];
+    if (fdemo) {
+      return { kind: 'fridge', why: fdemo, mins: 3 };
+    }
+    if (f && f.state === 'off') {
+      return { kind: 'fridge', why: 'off', mins: since(f) };
+    }
+    // Offline only after 10 minutes, so an HA restart or a Zigbee blip does not flash the red band.
+    if (f && DEAD.includes(f.state) && since(f) >= 10) {
+      return { kind: 'fridge', why: 'offline', mins: since(f) };
+    }
+    if (st && st.state === 'on') {
+      return { kind: 'fridge', why: 'stalled', mins: since(st) };
+    }
     const g = this._s(this._cfg.garage);
     if (demo === 'garage' || (g && g.state === 'on')) {
       const mins = demo === 'garage' ? 20 : Math.max(0, Math.floor((Date.now() - Date.parse(g.last_changed)) / 60000));
@@ -419,7 +443,7 @@ class HomeKioskCard extends HTMLElement {
   // ---- today's runs -----------------------------------------------------------------------------------------
 
   _fetchRuns() {
-    const h = this._hass, ids = [this._cfg.heating, this._cfg.aircon_energy].filter(Boolean);
+    const h = this._hass, ids = [this._cfg.heating, this._cfg.hot_water, this._cfg.aircon_energy].filter(Boolean);
     const day = dayKey(Date.now());
     if (!h || !h.callWS || !ids.length || this._runsBusy || (this._runs && this._runs.day === day && Date.now() - this._runs.at < RUNS_REFRESH_MS)) {
       return;
@@ -521,7 +545,7 @@ class HomeKioskCard extends HTMLElement {
     if (runs) {
       const day = 86400000, start = midnight(), pct = t => ((t - start) / day * 100).toFixed(2);
       html += `<div class="ranlbl">${label(runs)}</div>
-        <div class="strip">${runs.spans.map(([a, b]) => `<b style="left:${pct(a)}%;width:${(Math.max(b - a, 120000) / day * 100).toFixed(2)}%;background:${color}"></b>`).join('')}<i style="left:${pct(Date.now())}%"></i></div>
+        <div class="strip">${runs.spans.map(([a, b, bg]) => `<b style="left:${pct(a)}%;width:${(Math.max(b - a, 120000) / day * 100).toFixed(2)}%;background:${bg || color}"></b>`).join('')}<i style="left:${pct(Date.now())}%"></i></div>
         <div class="ticks"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>`;
     }
     return html ? `<div class="extra">${html}</div>` : '';
@@ -713,6 +737,19 @@ class HomeKioskCard extends HTMLElement {
   }
 
   _bandHtml(b) {
+    if (b.kind === 'fridge') {
+      const big = b.mins < 120 ? b.mins : Math.floor(b.mins / 60);
+      const unit = b.mins < 120 ? (b.mins === 1 ? 'minute' : 'minutes') : 'hours';
+      return `<div class="band" style="background:${this._P.warn};color:#fff">
+        <div class="disc"></div>
+        <div class="bandtext">
+          <div class="needs"><span class="sq" style="background:#fff"></span><span>Needs you now</span></div>
+          <div class="headline">${FRIDGE[b.why][0]}</div>
+          <div class="sub">${FRIDGE[b.why][1]}</div>
+        </div>
+        <div class="bandblock"><span class="count" style="color:${this._P.warn}">${big}</span><span class="unit" style="color:#fff">${unit} ${FRIDGE[b.why][2]}</span></div>
+      </div>`;
+    }
     if (b.kind === 'garage') {
       const big = b.mins < 120 ? b.mins : Math.floor(b.mins / 60);
       const unit = b.mins < 120 ? (b.mins === 1 ? 'minute open' : 'minutes open') : 'hours open';
@@ -775,6 +812,26 @@ class HomeKioskCard extends HTMLElement {
     return p && p.fail ? ' <span class="err">· no response</span>' : '';
   }
 
+  // The boiler's day on one strip: heating, hot water, and both at once as a bar split heating over water.
+  _boilerRuns(id, hwId) {
+    const heat = this._ran(id, (st, a) => a.hvac_action === 'heating');
+    const water = hwId && this._s(hwId) ? this._ran(hwId, (st, a) => a.hot_water_schedule_active === true) : null;
+    if (!heat || !water) {
+      return heat && { spans: heat.spans, label: `Ran ${dur(heat.total)} today` };
+    }
+    const P = this._P, both = [];
+    heat.spans.forEach(([a, b]) => water.spans.forEach(([c, d]) => {
+      if (Math.min(b, d) > Math.max(a, c)) {
+        both.push([Math.max(a, c), Math.min(b, d), `linear-gradient(${P.heatRun} 50%, ${P.waterRun} 50%)`]);
+      }
+    }));
+    const key = c => `<span class="key" style="background:${c}"></span>`;
+    return {
+      spans: [...heat.spans, ...water.spans.map(([a, b]) => [a, b, P.waterRun]), ...both],
+      label: `${key(P.heatRun)}Heating ${dur(heat.total)} &#183; ${key(P.waterRun)}Water ${dur(water.total)} today`,
+    };
+  }
+
   _heatingHtml() {
     const id = this._cfg.heating, s = this._s(id);
     if (!s) {
@@ -797,7 +854,7 @@ class HomeKioskCard extends HTMLElement {
     return `<div class="field" style="background:${this._P.heat};color:${this._P.heatFg}">
       <div class="head"><svg width="22" height="20" viewBox="0 0 26 24" aria-hidden="true"><path d="M13 0 L26 24 L0 24 Z" fill="${this._P.heatIcon}"></path></svg><span>Heating${this._stepErr(id)}</span></div>
       <div class="reading"><span class="temp">${cur === null ? '–' : deg1(cur)}</span><span class="note">Hallway.<br>${word}</span></div>
-      ${this._extraHtml(this._cfg.heating_rooms, this._ran(id, (st, a) => a.hvac_action === 'heating'), r => `Ran ${dur(r.total)} today`, this._P.heatRun)}
+      ${this._extraHtml(this._cfg.heating_rooms, this._boilerRuns(id, hwId), r => r.label, this._P.heatRun)}
       ${this._stepper(id, s, 'heating')}
       ${hwRow}
     </div>`;
@@ -1090,6 +1147,8 @@ button:active:not(:disabled) { transform:scale(.97); }
 .extra > .ranlbl:first-child { margin-top:0; }
 .strip { position:relative; height:12px; background:rgba(255,255,255,.22); }
 .strip b { position:absolute; top:0; bottom:0; }
+.ranlbl .key { display:inline-block; width:11px; height:11px; margin-right:6px; vertical-align:0; }
+.ranlbl .key:not(:first-child) { margin-left:4px; }
 .strip i { position:absolute; top:-5px; bottom:-5px; width:3px; background:#fff; }
 .ticks { display:flex; justify-content:space-between; font-size:14px; font-weight:700; opacity:.8; margin-top:5px; }
 .temp { font-family:'Archivo Black',sans-serif; font-size:60px; line-height:.95; letter-spacing:-.04em; }
@@ -1314,6 +1373,7 @@ const WALALA_CSS = `
 .walala .strip { height:14px; background:#fff; box-shadow:inset 0 0 0 2px ${W.ink}; }
 .walala .toprow > .field:nth-child(2) .strip { background:rgba(255,255,255,.3); box-shadow:none; }
 .walala .strip i { background:currentColor; }
+.walala .ranlbl .key { box-shadow:0 0 0 1.5px ${W.ink}; }
 .walala .ticks { font-size:13px; opacity:1; margin-top:4px; }
 .walala .stepper { grid-template-columns:80px minmax(0,1fr) 80px; height:80px; gap:10px; }
 .walala.roomy .stepper { grid-template-columns:100px minmax(0,1fr) 100px; height:100px; }

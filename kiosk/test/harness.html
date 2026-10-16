@@ -50,7 +50,7 @@ const day = n => new Date(FROZEN + n * 86400000).toISOString();
 const hass = {
   states,
   callService: (d, s, data) => { console.log('callService', d, s, JSON.stringify(data)); return Promise.resolve(); },
-  // A made-up day: heating 06:00-07:30 and 12:30-13:00; the air con's hourly Wh counter shows it working until about 10:50,
+  // A made-up day: heating 06:00-07:30 and 12:30-13:00, hot water 07:00-07:45 and 09:40-10:10; the air con's hourly Wh counter shows it working until about 10:50,
   // then on standby. Entries after the frozen time are dropped.
   callWS: () => {
     const at = (h, m) => new RealDate(2026, 9, 2, h, m).getTime() / 1000, upTo = e => e.lu * 1000 <= FROZEN;
@@ -59,7 +59,9 @@ const hass = {
     const ac = [[0, 0, 1605], [0, 49, 152], [1, 49, 346], [2, 49, 558], [3, 49, 760], [4, 49, 960], [5, 49, 1169], [6, 49, 1385],
       [7, 49, 1600], [8, 49, 1820], [9, 49, 2027], [10, 49, 2175], [11, 49, 2186], [12, 49, 2197], [13, 49, 2208], [14, 49, 2219]]
       .map(([h, m, v]) => ({ s: String(v), lu: at(h, m) })).filter(upTo);
-    return Promise.resolve({ [window.CARD_CONFIG.heating]: heat, [window.CARD_CONFIG.aircon_energy]: ac });
+    const water = [[0, 0, false], [7, 0, true], [7, 45, false], [9, 40, true], [10, 10, false]]
+      .map(([h, m, on]) => ({ s: 'schedule', a: { hot_water_schedule_active: on }, lu: at(h, m) })).filter(upTo);
+    return Promise.resolve({ [window.CARD_CONFIG.heating]: heat, [window.CARD_CONFIG.hot_water]: water, [window.CARD_CONFIG.aircon_energy]: ac });
   },
   connection: { subscribeMessage: (cb) => { setTimeout(() => cb({ forecast: [{ datetime: day(0), temperature: 20 }, { datetime: day(1), temperature: 17 }] }), 50); return Promise.resolve(() => {}); } },
 };
