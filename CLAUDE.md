@@ -32,9 +32,15 @@ the calibrated solar forecast, and a native Energy-dashboard forecast provider. 
 and old browser dashboard remain useful, and the standalone scripts still hold the only write path,
 but they are no longer the centre of gravity.
 
-Hardware is **three Fox LV5200 modules in parallel**: about 300 Ah at 51.2 V, **about 15.4 kWh**,
-5 kW delivery, 90% SOH. An earlier version of this file used 5.1 kWh -- one module -- and made every
-fill-time estimate three times too short. Logger serial and MAC are `SOLIS_LOGGER_SERIAL` and
+Hardware is **three Fox LV5200 modules in parallel**: nameplate about 300 Ah at 51.2 V, 15.4 kWh,
+5 kW delivery. **Measured usable capacity is only about 11.2 kWh (about 215 Ah) per 100% SOC** --
+verified 2026-10-17 over ten charge nights and nine evening discharges, by integrating 33134 current
+(196-220 Ah per 100%) and 33149 power (10.1-12.1 kWh per 100%, discharge median 11.24). A 13% -> 97%
+charge at 50 A finished in 3.3-3.8 h, which is ~190 Ah, not ~250. The BMS SOH (33140) has stepped 90%
+-> 87% between 2026-08-26 and 2026-10-08 and still overstates it. **Suspected, unverified: one module
+is not contributing** (215 Ah is almost exactly two 100 Ah modules); the owner is checking them. Use
+11.2 kWh in any energy arithmetic until that check and a re-measure. An earlier version of this file
+used 5.1 kWh -- one module -- and before that 15.4 kWh nameplate; both were wrong. Logger serial and MAC are `SOLIS_LOGGER_SERIAL` and
 `SOLIS_LOGGER_MAC` in `.env` (values in `CLAUDE.local.md`), Modbus port 8899. Do not bake a
 discovered IP into standalone code; use `solis_net.py`. The HA integration is different: its config
 entry requires an explicit host and does not call `solis_net.py`.
@@ -232,9 +238,11 @@ A small overnight battery charge usually means the battery began nearly full, no
 capacity. On 2026-08-27 it took only 2.3 kWh because previous-day solar left it high and it filled early.
 Check SOC at window open before raising 43141 or extending a window.
 
-The fill-rate crossover is about **48 A from 0%, about 45 A from the real 10% floor**: 15.4 kWh over six
-hours is 2.56 kW or roughly 48 A at 53 V; from 10%, about 14.6 kWh after losses takes 5.5 h at 50 A. The
-old 16 A advice used one module's 5.1 kWh and would leave the pack roughly two-thirds empty. Trimming
+The fill-rate crossover is about **36 A from 0%, about 32 A from the 12% floor**, using the measured
+~215 Ah: 215 Ah over six hours is 36 A; from 12%, about 190 Ah takes 3.8 h at 50 A, which matches
+the observed 3.3-3.8 h fills (7 and 12 Oct). The earlier 48 A / 5.5 h figures used the 15.4 kWh
+nameplate. The old 16 A advice used one module's 5.1 kWh and would leave the pack roughly two-thirds
+empty. Trimming
 from 48 A to leave solar headroom is the owner's decision, never an automatic optimisation.
 
 **"Charge overnight, export the sun" was settled 2026-08-23; do not reopen it.** `strategy_sim.py` used
@@ -252,7 +260,8 @@ The one material opportunity is a daytime Tesla dispatch: self-use makes the 5 k
 Temporarily forcing a charge window could save 30p-GBP 1.50 per occurrence, but it remains parked until
 there is a bulletproof restore; a slot left active grid-charges at 30p.
 
-The owner chose 43141 = 50 A deliberately: 0.17C on 300 Ah, roughly 5.5 h from the 10% floor. It may stop
+The owner chose 43141 = 50 A deliberately: 0.17C on 300 Ah nameplate (0.23C on the measured ~215 Ah),
+roughly 3.8 h from the 12% floor. It may stop
 around 97-98% after an empty start; that is accepted as kinder to LFP than holding 100%. **The floor is
 12%, not 10% or 20%.** Verified 2026-10-16 from raw history: discharge cut to ~78 W standby the moment SOC
 reached 12% (7 Oct 19:26, 12 Oct 23:25). Standby then drifts it to 11%, where the inverter grid-charges back

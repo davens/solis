@@ -459,11 +459,10 @@ PAGE = """<!doctype html>
 let battVolts = null;
 let battSoc = null;
 
-// Three Fox LV5200 modules in parallel: ~300 Ah at 51.2 V, ~15.4 kWh. It read
-// 5.1 for a while, which is *one* module - every fill estimate came out three
-// times too short. Used only to describe what a chosen current means in kW and
-// in hours; the dashboard never acts on it.
-const BATTERY_KWH = 15.4;
+// Three Fox LV5200 modules in parallel: 15.4 kWh nameplate, but ~11.2 kWh
+// measured per 100% SOC on 2026-10-17 (CLAUDE.md). Used only to describe what a
+// chosen current means in kW and in hours; the dashboard never acts on it.
+const BATTERY_KWH = 11.2;
 
 // String 1 is the 12-panel SW plane (12 x 400 W), string 2 the 8-panel SE
 // plane (8 x 400 W). The basis is the voltage ratio, not a traced cable: the

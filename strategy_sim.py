@@ -34,7 +34,7 @@ import argparse
 import random
 
 # --- hardware -----------------------------------------------------------------
-PACK_KWH = 15.4           # three Fox LV5200, nameplate
+PACK_KWH = 11.2           # three Fox LV5200: 15.4 nameplate, 11.2 measured 2026-10-17 (CLAUDE.md)
 SOC_MIN = 10              # over-discharge floor (owner-stated); below this nothing is served
 BATT_KW = 5.0             # owner-stated ceiling either way
 INVERTER_KW = 6.0         # AC ceiling; DC surplus above it can still charge the pack

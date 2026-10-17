@@ -29,7 +29,7 @@ MODELS = ["ecmwf_ifs025", "gfs_seamless", "icon_seamless", "ukmo_seamless",
 EFFECTIVE_KWP = 6.33
 INVERTER_W = 6000
 
-# Below this, tomorrow's sun will not refill the ~15.4 kWh pack by itself.
+# Below this, tomorrow's sun will not refill the pack (~11.2 kWh measured) by itself.
 LOW_KWH = 25.0
 UNCERTAINTY_KWH = 2.0
 
