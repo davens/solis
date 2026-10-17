@@ -15,7 +15,8 @@
 //   ping_morning: input_datetime.energy_ping_last  when the 09:00 phone ping last went out
 //   day_tight: binary_sensor.energy_day_tight      the 09:00 ping's own test, live; its "off" clears the low-energy line
 //   solar_power: sensor.<inverter>_solar_power    W
-//   house_load: sensor.<inverter>_house_load      W
+//   house_load: sensor.<inverter>_house_load      W, excludes the EPS port
+//   eps_load: sensor.<inverter>_backup_load       W on the EPS/backup port (air con); added to house_load
 //   grid_power: sensor.<inverter>_grid_power      W, positive = importing
 //   battery_power: sensor.<inverter>_battery_power  W, positive = charging; shown beyond 200 W
 //   garage: binary_sensor.garage_door             on = open (read-only: there is no garage control)
@@ -31,15 +32,15 @@
 //   car_battery: sensor.<car>_battery
 //   car_range: sensor.<car>_range                 km
 //   car_charging: sensor.<car>_charging_state     'Charging' while charging, 'Complete' when done
-//   car_state: sensor.<car>_state                 asleep | driving | online ...
+//   car_state: sensor.<car>_state                 asleep | driving | online ... (any case: TeslaMate title-cases it)
 //   car_plugged: binary_sensor.<car>_plugged_in
-//   car_locked: binary_sensor.<car>_locked
+//   car_unlocked: binary_sensor.<car>_unlocked   TeslaMate's lock sensor: on = unlocked
 //   car_power: sensor.<car>_charger_power         kW
 //   car_energy_added: sensor.<car>_charge_energy_added   kWh
 //   car_time_to_full: sensor.<car>_time_to_full_charge   hours
 //   car_speed: sensor.<car>_speed                 km/h
 //   car_charge_limit: sensor.<car>_charge_limit   fallback when Octopus has no charge target
-//   car_link: binary_sensor.teslamate_healthy     off = no link, show the last known charge
+//   car_problem: binary_sensor.teslamate_problem   on = no link, show the last known charge
 //   dishwasher: sensor.<dishwasher>_operation_state   Home Connect: run | delayedstart | finished | ready ...
 //   dishwasher_programme: select.<dishwasher>_active_programme
 //   dishwasher_finish: sensor.<dishwasher>_programme_finish_time   a timestamp
@@ -387,10 +388,24 @@ class HomeKioskCard extends HTMLElement {
     return `<span class="flow" style="color:${up ? C.green : C.caution}"><svg viewBox="0 0 12 12" width="16" height="16"><path d="${arrow}" fill="currentColor"/></svg>${kw}</span>`;
   }
 
+  // Whole-house draw: the house_load register misses the EPS port, so add it when configured.
+  _houseW() {
+    const main = this._n(this._cfg.house_load);
+    if (!this._cfg.eps_load) {
+      return main;
+    }
+    const eps = this._n(this._cfg.eps_load);
+    if (main === null || eps === null) {
+      return null;
+    }
+    return main + eps;
+  }
+
   // Solar, house and grid right now, as plain kW. Hidden when none of the three is configured.
   _liveHtml() {
     const cfg = this._cfg, kw = w => (Math.abs(w) / 1000).toFixed(1);
-    const solar = this._n(cfg.solar_power), house = this._n(cfg.house_load), grid = this._n(cfg.grid_power);
+    const solar = this._n(cfg.solar_power), grid = this._n(cfg.grid_power);
+    const house = this._houseW();
     const cell = (label, w) => `<div><div class="lv">${w === null ? '–' : kw(w)}<small> kW</small></div><div class="ll">${label}</div></div>`;
     if (solar === null && house === null && grid === null) {
       return '';
@@ -945,12 +960,12 @@ class HomeKioskCard extends HTMLElement {
   _carHtml() {
     const cfg = this._cfg, id = cfg.car_climate, s = this._s(id), icons = this._P.icons;
     const soc = this._n(cfg.car_battery), km = this._n(cfg.car_range);
-    const st = (this._s(cfg.car_state) || {}).state;
+    const st = String((this._s(cfg.car_state) || {}).state || '').toLowerCase();
     const cs = (this._s(cfg.car_charging) || {}).state;
     const kw = this._n(cfg.car_power), added = this._n(cfg.car_energy_added), ttf = this._n(cfg.car_time_to_full);
     const plugged = this._on(cfg.car_plugged);
-    const lock = (this._s(cfg.car_locked) || {}).state;
-    const stale = (this._s(cfg.car_link) || {}).state === 'off' || !st || DEAD.includes(st) || soc === null;
+    const lock = ({ on: 'off', off: 'on' })[(this._s(cfg.car_unlocked) || {}).state];
+    const stale = this._on(cfg.car_problem) || !st || DEAD.includes(st) || soc === null;
     const charging = cs === 'Charging' || (kw !== null && kw > 0);
     const asleep = ['offline', 'asleep', 'suspended'].includes(st);
     const hm = t => new Date(t).toTimeString().slice(0, 5);

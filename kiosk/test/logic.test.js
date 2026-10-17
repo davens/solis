@@ -512,10 +512,10 @@ test('bands: low power, and the car charging off the house battery outside the c
   assert.strictEqual(band(w), 'The garage is open.', 'garage beats everything');
 });
 
-const CAR = { car_battery: 'sensor.cb', car_state: 'sensor.cst', car_charging: 'sensor.cch', car_plugged: 'binary_sensor.cpl', car_locked: 'binary_sensor.clk', car_link: 'binary_sensor.tm', car_power: 'sensor.ckw',
+const CAR = { car_battery: 'sensor.cb', car_state: 'sensor.cst', car_charging: 'sensor.cch', car_plugged: 'binary_sensor.cpl', car_unlocked: 'binary_sensor.clk', car_problem: 'binary_sensor.tm', car_power: 'sensor.ckw',
   car_alerts: [{ entity: 'binary_sensor.boot', name: 'Boot open' }, { entity: 'binary_sensor.sentry', name: 'Sentry', info: true }] };
 const carStates = (o = {}) => ({ 'sensor.cb': { state: '40', attributes: {} }, 'sensor.cst': { state: 'asleep', attributes: {} }, 'sensor.cch': { state: 'Stopped', attributes: {} },
-  'binary_sensor.cpl': { state: 'off', attributes: {} }, 'binary_sensor.clk': { state: 'on', attributes: {} }, 'binary_sensor.tm': { state: 'on', attributes: {} }, 'sensor.ckw': { state: '0', attributes: {} }, ...o });
+  'binary_sensor.cpl': { state: 'off', attributes: {} }, 'binary_sensor.clk': { state: 'off', attributes: {} }, 'binary_sensor.tm': { state: 'off', attributes: {} }, 'sensor.ckw': { state: '0', attributes: {} }, ...o });
 const at = (w, h, m) => { const d = new Date(); d.setHours(h, m, 0, 0); w.setNow(d.getTime()); w.card._render(true); };
 
 test('car: unplugged shows the live layout with the HA status; "Not plugged in" only in the evening', async () => {
@@ -523,9 +523,11 @@ test('car: unplugged shows the live layout with the HA status; "Not plugged in" 
   at(w, 14, 0);
   assert.ok(w.html().includes('<span>Asleep</span>') && w.html().includes('<span>Locked</span>'));
   assert.ok(!w.html().includes('Not plugged in') && !w.html().includes('Tonight'));
+  w.update({ 'sensor.cst': { state: 'Offline', attributes: {} } });
+  assert.ok(w.html().includes('<span>Asleep</span>'), "TeslaMate's title-cased state still reads as asleep");
   at(w, 21, 40);
   assert.ok(w.html().includes('Not<br>plugged in.'));
-  w.update({ 'binary_sensor.clk': { state: 'off' }, 'binary_sensor.boot': { state: 'on' }, 'binary_sensor.sentry': { state: 'on' } });
+  w.update({ 'binary_sensor.clk': { state: 'on' }, 'binary_sensor.boot': { state: 'on' }, 'binary_sensor.sentry': { state: 'on' } });
   assert.ok(w.html().includes('class="amber">Unlocked'));
   assert.strictEqual((w.html().match(/class="chip( warn)?"/g) || []).length, 2, 'at most two chips');
   assert.ok(w.html().includes('chip warn">Unplugged'), 'with alerts, the evening note becomes the first chip');
@@ -551,7 +553,7 @@ test('car: plugged in with slots shows Tonight, Waiting for the next slot, and N
 test('car: complete with no slots left goes back to the tall button; no link keeps climate working', async () => {
   const w = world({ config: CAR, states: carStates({ 'binary_sensor.cpl': { state: 'on', attributes: {} }, 'sensor.cch': { state: 'Complete', attributes: {} } }) });
   assert.ok(w.html().includes('Charge complete') && !w.html().includes('Tonight') && !w.html().includes('carbtn short'));
-  w.update({ 'binary_sensor.tm': { state: 'off' } });
+  w.update({ 'binary_sensor.tm': { state: 'on' } });
   assert.ok(w.html().includes('No link to TeslaMate') && w.html().includes('Last known.'));
   assert.ok(!w.html().includes('Charge complete') && !/data-act="car"[^>]*disabled/.test(w.html()));
 });
@@ -632,3 +634,14 @@ test('dishwasher: a delayed start shows when it finishes after the delay, not se
   console.log(`${tests.length - failed}/${tests.length} passed`);
   process.exit(failed ? 1 : 0);
 })();
+
+test('live house figure adds the EPS port, which the house register misses; a missing EPS reading shows a dash, not a low number', async () => {
+  const cfg = { solar_power: 'sensor.sp', house_load: 'sensor.hl', eps_load: 'sensor.eps', grid_power: 'sensor.gp' };
+  const w = world({ config: cfg, states: { 'sensor.sp': { state: '0' }, 'sensor.hl': { state: '681' }, 'sensor.eps': { state: '383' }, 'sensor.gp': { state: '4000' } } });
+  const house = () => (w.html().match(/<div class="lv">([^<]*)<small> kW<\/small><\/div><div class="ll">House/) || [])[1];
+  assert.strictEqual(house(), '1.1');
+  w.update({ 'sensor.eps': { state: 'unavailable' } });
+  assert.strictEqual(house(), '–');
+  const noEps = world({ config: { ...cfg, eps_load: undefined }, states: { 'sensor.hl': { state: '681' } } });
+  assert.ok(noEps.html().includes('0.7<small> kW</small></div><div class="ll">House'), 'without eps_load configured, house alone');
+});

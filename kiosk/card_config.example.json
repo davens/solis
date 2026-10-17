@@ -12,6 +12,7 @@
   "day_tight": "binary_sensor.energy_day_tight",
   "solar_power": "sensor.<inverter>_solar_power",
   "house_load": "sensor.<inverter>_house_load",
+  "eps_load": "sensor.<inverter>_backup_load",
   "grid_power": "sensor.<inverter>_grid_power",
   "battery_power": "sensor.<inverter>_battery_power",
   "garage": "binary_sensor.<garage_door>",
@@ -28,13 +29,13 @@
   "car_charging": "sensor.<car>_charging_state",
   "car_state": "sensor.<car>_state",
   "car_plugged": "binary_sensor.<car>_plugged_in",
-  "car_locked": "binary_sensor.<car>_locked",
+  "car_unlocked": "binary_sensor.<car>_unlocked",
   "car_power": "sensor.<car>_charger_power",
   "car_energy_added": "sensor.<car>_charge_energy_added",
   "car_time_to_full": "sensor.<car>_time_to_full_charge",
   "car_speed": "sensor.<car>_speed",
   "car_charge_limit": "sensor.<car>_charge_limit",
-  "car_link": "binary_sensor.teslamate_healthy",
+  "car_problem": "binary_sensor.teslamate_problem",
   "car_alerts": [
     {
       "entity": "binary_sensor.<car>_doors_open",
