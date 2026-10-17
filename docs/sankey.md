@@ -11,7 +11,7 @@ Colours carry meaning here and were chosen deliberately:
 | Grid import | `var(--error-color)` red | The most expensive flow on the chart. It previously shared `--info-color` with House, so the thing costing the most money read as house-coloured. |
 | Grid export | `#a78bfa` violet | It earns money; red was actively misleading. The violet matches the Power card's grid trace. |
 | Tesla | `#ffffff` white | The owner's car is white. It is not an accent from the palette, so do not "correct" it to one. |
-| House | `var(--primary-color)` | Since 2026-09-11 it excludes the car, air con and fridge, but keeps the name "House" -- the owner's words were "house stays named house, but is essentially rest of house". |
+| House | `var(--primary-color)` | It excludes the car and fridge from register 33147; EPS was never inside that register and is shown separately, but keeps the name "House" -- the owner's words were "house stays named house, but is essentially rest of house". |
 | Fridge | `#14b8a6` teal | Measured directly by a ZHA smart plug; distinct from Solar, Air con and Tesla. |
 | Air con | `#ff69b4` hot pink | Owner's choice, and still the colour now the node is back (2026-09-11). Yellow `#ffd60a` was tried first and rejected on sight: Solar's `--warning-color` resolves `rgb(255,166,0)` on this theme and the two blurred together. Do not retry a yellow or amber here. |
 | Solar / battery | warning (orange) / success | unchanged |
@@ -44,49 +44,43 @@ Air con, Fridge, Battery in, Grid export and Inverter, and every sink is a termi
 `value: sensor.flow_<source>_to_<sink>_daily`, which the card applies as
 `min(parent_remainder, child_remainder, value)`, so declaration order no longer decides the picture.
 House, Tesla, Air con, Fridge and Inverter have no counter of their own: each is `entity_id` plus `add_entities` over
-its three inbound meters. Inverter is DC/AC conversion loss and parasitic draw, ~2.5 kWh/day, grey
+its three inbound meters. Inverter is the non-negative residual after House and EPS, including conversion loss, parasitic draw and sensor skew, grey
 `#6b7280`.
 
-**Air con became its own terminus on 2026-09-11, at the owner's request**, and
-**Fridge became its own terminus on 2026-10-11**. The carve-out order is now Tesla,
-then Fridge, then Air con:
+**Allocation updated 2026-10-17.** Tesla and Fridge are carved out of House;
+EPS is a separate AC output feeding the Air con node. House keeps its name.
 
     T  = min(max(0, tesla), H)
     F  = min(max(0, fridge), H - T)
-    A  = min(max(0, aircon), H - T - F)
-    Hr = H - T - F - A
+    Hr = H - T - F
+    A  = max(0, eps)
+    L  = max(0, (S + B + G) - (Hr + T + F + A + C + E))
 
-That ordering is deliberate: best-measured loads go first. Tesla stays first, and
-`sensor.fridge_power` is a direct ZHA plug reading at roughly 10 s cadence, while
-`sensor.aircon_power` is an hourly average held for the next hour. That average can
-exceed instantaneous air-con draw. Allocating Fridge before Air con means an air-con
-overshoot can consume only House rest. Every Tesla ribbon stays numerically unchanged,
-and `Hr + T + F + A == H` keeps Inverter unchanged too. House keeps its name.
+Total load is `H + A`. Source attribution remains proportional after solar-only
+export. Air con is independent of the House split; its existing `*_to_aircon`
+keys and all nine helper entity ids remain stable for statistics continuity.
+Tesla affects nine flows; fridge affects six; EPS affects the three Air con and
+three Inverter flows. The common availability guard requires six entities:
+solar, battery, grid, House, Tesla and EPS. Only fridge uses `float(0)`; a missing
+fridge reading leaves that load inside House.
 
-**The blindness runs one way only**: F reads T; A reads T and F. Fridge flows depend
-on Tesla but ignore air con; air-con flows depend on both Tesla and fridge. Neither
-appliance can move Tesla. A dead TeslaMate still unmoors **twelve of eighteen** flows
-(House, Tesla, Fridge and Air con, three each), unchanged by this reorder. A dead
-fridge channel unmoors nine flows; a dead air-con channel unmoors six. The shared
-availability guard still blanks all eighteen flows when one of its five inputs is bad.
+Historical captures contain neither EPS nor fridge. Replay holds both at zero
+for arithmetic and marks them blind. House + Fridge is the knowable total
+excluding the car (`Hr + F = H - T`), and House + Tesla + Fridge equals H.
+Air con, Inverter residual and source-spent totals are refused without EPS;
+House and Fridge individually are refused without fridge. Tesla blindness also
+refuses House + Fridge. Export and battery-charge totals remain knowable.
 
-Fridge is a teal `#14b8a6` peer of Tesla and Air con in section 1, fed directly by
-Solar, Battery out and Grid import through the same power -> integration -> daily
-utility_meter chains. Its direct power reading has `state_class: measurement`.
-Like air con it uses `| float(0)`, clamped at zero, and is deliberately ABSENT from
-the five-entity availability guard: a missing reading leaves the fridge inside House.
-Historical captures contain neither appliance reading: replay holds both at zero,
-refuses House, Air con and Fridge individually, and keeps House + Air con + Fridge
-as the knowable total excluding the car.
-
-**The Inverter node was validated against physics on 2026-08-31 and is correct.** On a pure
+**Historical power-path validation, 2026-08-31 (before EPS separation).** On a pure
 grid-charging night it read 0.580 kWh two hours in; integrating the raw 5-minute power statistics
 over the same window gives a residual of 5.443 - 4.348 - 0.503 = 0.592 kWh, 2% away. The check that
 matters is that the power path reproduces the independently measured 0.887 charge efficiency
 (4.348 / (5.443 - 0.503) = 88.0%). **Do not "validate" this node against `house_consumption_today`.**
-That counter is a derived residual that already contains the conversion loss, so the comparison makes
+That counter is a derived residual; it includes conversion loss and, by inference
+from that definition, EPS draw too. The comparison makes
 the node look like ~0.5 kWh of double-counted house load when it is not -- see "What the daily
-counters do and do not prove". Two independent auditors both stalled on exactly that trap.
+counters do and do not prove". Two independent auditors both stalled on exactly that trap. Historical captures lack
+EPS, so their H-only residual cannot independently establish conversion loss alone.
 
 Source of truth is `sankey_tests/layout_v2.py`, with the design and reasons in
 `sankey_tests/BRIEF_V2.md`. **The deploy scripts are in git at the repository root, because the
@@ -139,43 +133,34 @@ full-day counters. Until both sides have covered the same window the source bars
 the ribbons are hairlines. Both reset at midnight, after which they measure the same day and the
 proportions are honest. Do not "fix" this by rescaling anything.
 
-### The air-con channel is measured differently from everything else
+### Air con uses the measured EPS register (2026-10-17)
 
-`sensor.aircon_power` is now a **trigger-based template sensor** in the HA package
-`/config/packages/aircon_power.yaml`; a copy is kept at
-[`ha_packages/aircon_power.yaml`](../ha_packages/aircon_power.yaml). `lg_thinq`
-publishes no power entity for the unit, only `energy_today` in Wh. The monthly
-counter updates once a day and was rejected; the daily counter changes roughly hourly
-(measured over four days: 95 changes, median gap 3600 s).
+**Owner-stated:** the air con and a few-watt hand-vacuum charger are on the
+inverter's EPS (backup) port; other loads there are exceptionally rare. Treating
+EPS as Air con is the owner's practical identification of that circuit.
 
-It replaced the UI `derivative` helper on **2026-10-11** because LG re-sends unchanged
-readings: each repeat counted as zero change, dropping power to 0 W partway through
-every hour. Two readings seconds apart also produced spikes up to **~1.4 MW**.
-On 2026-10-11 the Sankey credited **2.05 kWh** to air con against LG's **3.2 kWh**.
+**History is deliberately not corrected (owner's decision, 2026-10-17).** Deployed live at about
+09:35 on 2026-10-17. Earlier days keep the old split: Air con carved out of House (so House reads
+low by the air-con draw) and EPS hidden inside the Inverter residual. Totals are unaffected. No EPS
+history exists to rebuild from, and the old LG-derived `sensor.aircon_power` -- now deleted -- read
+76 W against a measured 383 W EPS, so it cannot be used as a stand-in.
 
-The new sensor converts each changed `energy_today` step into average power over the
-interval it covers and holds that value. Changes less than 15 minutes apart are
-merged into the next step. A drop is treated as the daily reset, using the new reading
-as energy used since the reset; the reset is now observed at about **00:14 local**.
-No step for **90 minutes** reads 0, and a step more than 20 hours after the last only re-baselines. It reads 0 until its first baseline after creation
-and restores its state and baseline across restarts, so the former claim of
-`unknown` for up to two hours after every restart no longer applies.
+**Verified facts supplied by the owner, 2026-10-17:** EPS is outside House load
+(register 33147). Register 33148 is exposed as
+`sensor.solis_inverter_backup_load`: non-negative AC watts, `state_class:
+measurement`, polled about every 10 s in the same Modbus block as House, with
+the same availability. EPS is a guarded input read without a float default.
 
-**The accepted caveat remains: the split lags by up to an hour.** The held average
-describes the interval just past, so around sunrise and sunset that usage is attributed
-to the following interval's source mix. This lag does not itself change daily totals;
-clamping a held average against instantaneous House load can still limit the carve-out.
+The supplied live check was grid 11265 W, battery charging 2733 W, House 7728 W,
+EPS 383 W and solar 0 W: subtracting EPS reduces the residual from 804 to 421 W.
+The implied charge efficiency is about 88%, consistent with the 2026-08-31
+validated 0.887. The supplied hourly regression since 2026-10-11 found each
+LG-derived air-con watt raised the old residual by 1.00 W (95% CI 0.90–1.11),
+without raising House. This supports the separate-output interpretation; the
+regression alone does not identify every EPS appliance.
 
-Both `sensor.aircon_power` and `sensor.fridge_power` retain `| float(0)` and remain
-ABSENT from the availability guard, which still counts exactly five entities.
-A missing reading gives A = 0 or F = 0 and keeps that load inside House; the house
-total stays right and only the split is lost. The default covers only text Jinja
-cannot parse: `'inf'` and `'1e9'` parse, so the `[ AR, H - T - F ] | min` clamp
-contains air-con overshoots. Fridge has already been allocated and cannot be starved.
-
-Verified live 2026-09-11, against the config entries HA actually stores rather than the YAML: all
-fifteen deployed templates reproduce `sankey_tests/flows.py` to **4.8e-05 W** with the air con
-non-zero, splitting 39.625 solar / 0.925 battery / 0 grid -- the same source mix as every other sink.
+These live observations were not repeated during the offline code change.
+The LG-derived channel is no longer an input to the Sankey.
 
 ### Card mechanics (established on v1, still true of the card)
 
@@ -245,8 +230,7 @@ home from another AC charger, which is acceptable because the owner charges only
 device tracker, "home" rests entirely on that voltage test, which is the known hole. Verified end to
 end 2026-08-27: 7.88 kWh reached the pack against 8.384 kWh measured on the AC side -- a 6.0% charger
 loss -- over three sessions (00:30-01:00, 02:00-02:30, 05:00-05:16) taking SOC 63 -> 67 -> 72 -> 75%.
-Neither Tesla nor AC had statistics before 2026-08-27, so no backfill exists. The LG sensor updates in
-hourly lumps; a flat hour is cloud polling cadence, not proof the AC is off.
+Tesla statistics begin on 2026-08-27; earlier Tesla use cannot be backfilled here.
 
 ### What the Sankey (and every statistics card) actually reads
 

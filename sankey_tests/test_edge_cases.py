@@ -1,59 +1,6 @@
-"""Edge cases and bad data for flows.decompose() -- the v2 eighteen-flow law.
-
-These sensors will run as Home Assistant template sensors reading six live
-entities off the solis_solarman integration, plus the Tesla charger template
-and the air-con channel derived from the LG hourly energy counter. A template
-sensor is handed whatever the source entity's state string happens to be, so
-the input domain of decompose() is "anything HA can put in a Jinja variable",
-not "six floats".
-
-The air-con channel is the one whose bad-input surface is worth extra
-suspicion: it is not a live power sensor at all but a held average from an hourly
-counter, so it can be absent, stale by up to an hour, or briefly negative
-across a counter rebase. Absent must raise; negative must clamp. Both are
-asserted below.
-
-Chosen contract for bad input, asserted throughout this file:
-
-    A non-numeric state MUST raise (ValueError or TypeError). It must NOT be
-    coerced to zero.
-
-Justification. A template sensor that throws renders `unavailable`; a template
-sensor that returns 0 renders a confident, wrong number. The dominant failure
-mode on this system is logger session contention -- CLAUDE.md records that a
-competing Modbus session fails with a bare `_queue.Empty`, at which point the
-integration's entities go `unavailable`. If decompose() zeroed those, the
-Sankey would draw a house with no supply and a battery doing nothing, which is
-indistinguishable from 03:00 on a dead-calm night. `unavailable` propagates the
-outage honestly and the card simply drops the node. Silence is safer than a
-plausible lie, so raising is correct.
-
-`float("nan")` is the subtle one, because it PARSES. It therefore slips past any
-"did it parse" guard and is then silently turned into 0.0 by `max(0.0, nan)`.
-flows.py carries an explicit isnan guard for exactly this; several tests below
-exist only to keep it there.
-
-WHAT CHANGED FROM v1, and why these tests were rewritten rather than tweaked
----------------------------------------------------------------------------
-v1's decompose() was sequential-greedy with a late DC->AC referral, so the
-allocation depended on the order sources were paid and solar absorbed a fitted
-residual. Its edge-case expectations encoded that order.
-
-v2 is proportional (BRIEF_V2.md section 2): export is solar-only, then every
-remaining sink draws the same source mix. Three consequences drive the rewrite:
-
-  1. There is no ETA_FLOOR and no fitted efficiency, so v1's `solar_ceiling()`
-     helper -- solar / ETA_FLOOR -- has no v2 meaning. The replacement bound is
-     tighter and physical: on a self-consistent sample solar spends EXACTLY its
-     reading. See test_a_consistent_sample_spends_each_source_exactly.
-  2. There are three device inputs (tesla, aircon, fridge) and a fifth sink (Inverter),
-     so the flow count is eighteen, not six. The Tesla is carved out of the
-     house load first and the air con out of what the Tesla left, which is why
-     T is blind to the air-con reading but A is not blind to the Tesla's.
-  3. Energy arriving with nowhere to go now lands on the named Inverter node
-     instead of vanishing. decompose(0, 0, 2000, 0, 0) sends 2 kW to Inverter.
-
-Nothing here touches the network, HA, or any file.
+"""Adversarial offline input, polarity and arithmetic checks for Sankey v2.
+Measured EPS is a separate AC output outside House (2026-10-17).
+Every invalid core input must be rejected rather than silently zero-filled.
 """
 import itertools
 import math
@@ -86,18 +33,17 @@ U32_TRUE_VALUE = -43.0       # what 4294967253 actually means as s32
 HA_BAD_STATES = ["unavailable", "unknown", "", "None", "   ", "\n"]
 
 # Position names, so a parametrised failure says which register broke.
-ARGS = ("solar", "battery", "grid", "house", "tesla", "aircon", "fridge")
+ARGS = ("solar", "battery", "grid", "house", "tesla", "eps", "fridge")
 
-# A ~1 kW hall-and-landing LG split unit, the size this site actually runs.
 AIRCON_W = 1000.0
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def flows(solar, battery, grid, house, tesla=0.0, aircon=0.0, fridge=0.0):
+def flows(solar, battery, grid, house, tesla=0.0, eps=0.0, fridge=0.0):
     """decompose() with the contract's own key check applied."""
-    out = decompose(solar, battery, grid, house, tesla, aircon, fridge)
+    out = decompose(solar, battery, grid, house, tesla, eps, fridge)
     assert set(out) == set(FLOWS), f"unexpected keys: {sorted(out)}"
     return out
 
@@ -179,7 +125,7 @@ def total_spent_law(r):
             + loss)
 
 
-def spends_sources_exactly(solar, battery, grid, house, tesla=0.0, aircon=0.0, fridge=0.0):
+def spends_sources_exactly(solar, battery, grid, house, tesla=0.0, eps=0.0, fridge=0.0):
     """True when every source's outbound flows sum to exactly its own reading.
 
     TWO conditions, and getting this wrong is easy -- an earlier draft of this
@@ -197,16 +143,16 @@ def spends_sources_exactly(solar, battery, grid, house, tesla=0.0, aircon=0.0, f
                         uniform random inputs it is common, which is why the
                         predicate has to say so.
     """
-    r = readings(solar, battery, grid, house, tesla, aircon, fridge)
+    r = readings(solar, battery, grid, house, tesla, eps, fridge)
     supply = r["solar"] + r["discharge"] + r["imp"]
     drawn = (r["house_rest"] + r["tesla"] + r["aircon"] + r["fridge"] + r["charge"]
              + r["exp"])
     return supply >= drawn and r["exp"] <= r["solar"]
 
 
-def supply_exceeds_draw(solar, battery, grid, house, tesla=0.0, aircon=0.0, fridge=0.0):
+def supply_exceeds_draw(solar, battery, grid, house, tesla=0.0, eps=0.0, fridge=0.0):
     """True when the Inverter clamp is idle, i.e. L is the real residual."""
-    r = readings(solar, battery, grid, house, tesla, aircon, fridge)
+    r = readings(solar, battery, grid, house, tesla, eps, fridge)
     supply = r["solar"] + r["discharge"] + r["imp"]
     drawn = (r["house_rest"] + r["tesla"] + r["aircon"] + r["fridge"] + r["charge"]
              + r["exp"])
@@ -744,66 +690,36 @@ def test_a_seven_kilowatt_tesla_slot_is_not_confused_with_the_house_battery():
     assert out["grid_to_house"] == pytest.approx(300.0)
 
 
-# ===========================================================================
-# 4b. The air-con input -- new alongside the Tesla
-#
-# Unlike every other channel this one is not a power sensor. The LG ThinQ
-# integration publishes no power entity at all, only an hourly energy counter,
-# so the channel is that counter's held average: one value held for a whole hour,
-# describing the hour that has just finished. Three consequences are tested
-# here -- it can be absent, it can disagree badly with the 10 s house poll, and
-# a negative numeric input must clamp safely even though the template handles resets.
-# ===========================================================================
-def test_aircon_is_carved_out_of_the_house_after_the_tesla():
-    """BRIEF_V2 section 9: T first, then A out of what T left, then Hr.
-
-    Asserting the ORDER, not just the arithmetic. Carving A first would leave
-    the Tesla flows depending on the air-con reading, and the Tesla figures on
-    every day recorded before the air-con channel existed would stop being
-    reportable.
-    """
-    out = flows(0.0, 0.0, 3000.0, 3000.0, 1200.0, AIRCON_W)
-    assert tesla_in(out) == pytest.approx(1200.0)
-    assert aircon_in(out) == pytest.approx(AIRCON_W)
-    assert house_in(out) == pytest.approx(800.0)
-    assert house_in(out) + tesla_in(out) + aircon_in(out) == pytest.approx(3000.0)
+def test_eps_is_outside_house_after_tesla_split():
+    out = flows(0, 0, 5000, 3000, 1200, AIRCON_W)
+    assert tesla_in(out) == 1200
+    assert aircon_in(out) == AIRCON_W
+    assert house_in(out) == 1800
+    assert house_in(out) + tesla_in(out) == 3000
 
 
-def test_aircon_larger_than_the_house_load_is_clamped():
-    """A hour-old air-con figure against a live house poll can out-read it.
-
-    The whole house becomes air con, House goes to zero, and NOTHING is
-    fabricated: the three sinks still total exactly the house reading and the
-    sources are spent exactly once.
-    """
-    out = flows(0.0, 0.0, 2000.0, 2000.0, 0.0, 9000.0)
-    assert aircon_in(out) == pytest.approx(2000.0)
-    assert house_in(out) == 0.0
-    assert inverter_in(out) == 0.0
-    assert grid_out(out) == pytest.approx(2000.0)
-    assert sum(out.values()) == pytest.approx(2000.0)
+def test_eps_exceeding_house_is_not_capped():
+    out = flows(0, 0, 12000, 2000, 0, 9000)
+    assert aircon_in(out) == 9000
+    assert house_in(out) == 2000
+    assert inverter_in(out) == 1000
+    assert grid_out(out) == 12000
     assert_non_negative(out)
 
 
-def test_aircon_clamps_to_zero_when_the_tesla_already_took_the_whole_house():
-    """Both devices over-reading at once. A must clamp to 0, not go negative.
-
-    This is the compound case the single-clamp version gets wrong: T alone is
-    within the house, A alone is within the house, but T + A is not.
-    """
-    out = flows(0.0, 0.0, 7600.0, 7600.0, TESLA_SLOT_W + 600.0, AIRCON_W)
-    assert tesla_in(out) == pytest.approx(7600.0)
-    assert aircon_in(out) == 0.0
-    assert house_in(out) == 0.0
-    assert sum(out.values()) == pytest.approx(7600.0)
+def test_eps_still_flows_when_tesla_takes_house():
+    out = flows(0, 0, 10000, 7600, TESLA_SLOT_W + 600, AIRCON_W)
+    assert tesla_in(out) == 7600
+    assert aircon_in(out) == AIRCON_W
+    assert house_in(out) == 0
 
 
-def test_aircon_takes_only_what_the_tesla_left():
+def test_eps_is_not_limited_by_house_remainder():
     """The partial version: T takes most of the house, A gets the remainder."""
-    r = readings(0.0, 0.0, 5000.0, 5000.0, 4500.0, AIRCON_W)
-    assert r["tesla"] == 4500.0
-    assert r["aircon"] == 500.0
-    assert r["house_rest"] == 0.0
+    r = readings(0, 0, 7000, 5000, 4500, AIRCON_W)
+    assert r["tesla"] == 4500
+    assert r["aircon"] == AIRCON_W
+    assert r["house_rest"] == 500
 
 
 @pytest.mark.parametrize("bad", HA_BAD_STATES + [None, float("nan"),
@@ -811,15 +727,6 @@ def test_aircon_takes_only_what_the_tesla_left():
                                                  True, False, [], {},
                                                  MAX_PLAUSIBLE_W + 1.0])
 def test_aircon_unavailable_raises_rather_than_assuming_zero(bad):
-    """An absent air-con reading must NOT silently become 0.
-
-    A zeroed air con does not blank the chart, which is what makes it dangerous:
-    the load simply reappears inside House and the ribbon looks entirely
-    plausible. The LG integration polls the cloud in hourly lumps and CLAUDE.md
-    already records that a flat hour is cadence rather than proof the unit is
-    off -- so "the air con read nothing" is a statement this module must never
-    make on its own.
-    """
     with pytest.raises((ValueError, TypeError)):
         decompose(0.0, 0.0, 3000.0, 3000.0, 0.0, bad)
 
@@ -857,28 +764,9 @@ def test_aircon_zero_reproduces_the_five_input_behaviour():
             assert out[key] == 0.0
 
 
-def test_aircon_held_flat_across_an_hour_is_not_stale():
-    """The channel holds ONE value for a whole hour by construction.
-
-    decompose() must be a pure function of what it is handed and must not
-    discount a repeated reading -- the held value is the correct description of
-    the hour that just finished, not a stale sample.
-    """
-    args = (0.0, 0.0, 1600.0, 1600.0, 0.0, AIRCON_W)
-    first = flows(*args)
-    for _ in range(10):
-        assert flows(*args) == first
-    assert first["grid_to_aircon"] == pytest.approx(AIRCON_W)
-    assert first["grid_to_house"] == pytest.approx(600.0)
 
 
 def test_aircon_draws_the_same_source_mix_as_every_other_sink():
-    """The proportional law has no special case for the air con.
-
-    An hourly-resolution channel sitting beside 10 s ones is exactly where a
-    future "smooth it a bit" special case would be tempting; this pins that the
-    air con is allocated identically to the house remainder.
-    """
     out = flows(3000.0, 0.0, 1000.0, 2000.0, 0.0, 800.0)
     assert out["solar_to_aircon"] / aircon_in(out) == pytest.approx(
         out["solar_to_house"] / house_in(out))
@@ -899,8 +787,6 @@ def test_a_charging_battery_never_runs_the_air_con():
 
 
 def test_no_aircon_to_anything_flow_exists():
-    """Air con is a terminus. It is a sink and never a source, so there must be
-    no outbound key for it at all -- absent, not zero."""
     assert not any(f.startswith("aircon_") for f in FLOWS)
     assert sorted(f for f in FLOWS if f.endswith("_to_aircon")) == [
         "battery_to_aircon", "grid_to_aircon", "solar_to_aircon"]
@@ -909,8 +795,8 @@ def test_no_aircon_to_anything_flow_exists():
 def test_tesla_and_aircon_are_both_carved_out_on_one_overnight_sample():
     """The realistic compound case: a ~7 kW Octopus slot, the pack charging at
     50 A, the air con on, and a small baseline -- all from the grid at once."""
-    house = TESLA_SLOT_W + AIRCON_W + 300.0
-    out = flows(0.0, CHARGE_LIMIT_W, house + CHARGE_LIMIT_W, house,
+    house = TESLA_SLOT_W + 300.0
+    out = flows(0.0, CHARGE_LIMIT_W, house + AIRCON_W + CHARGE_LIMIT_W, house,
                 TESLA_SLOT_W, AIRCON_W)
     assert out["grid_to_tesla"] == pytest.approx(TESLA_SLOT_W)
     assert out["grid_to_aircon"] == pytest.approx(AIRCON_W)
@@ -1036,12 +922,12 @@ def test_a_consistent_sample_spends_each_source_exactly():
         grid = rng.uniform(-5000.0, 5000.0)
         house = rng.uniform(0.0, 6000.0)
         tesla = rng.uniform(0.0, house)
-        aircon = rng.uniform(0.0, house)
+        eps = rng.uniform(0.0, house)
         fridge = rng.uniform(0.0, house)
-        if not spends_sources_exactly(solar, battery, grid, house, tesla, aircon, fridge):
+        if not spends_sources_exactly(solar, battery, grid, house, tesla, eps, fridge):
             continue
-        r = readings(solar, battery, grid, house, tesla, aircon, fridge)
-        out = flows(solar, battery, grid, house, tesla, aircon, fridge)
+        r = readings(solar, battery, grid, house, tesla, eps, fridge)
+        out = flows(solar, battery, grid, house, tesla, eps, fridge)
         assert solar_out(out) == pytest.approx(r["solar"], rel=1e-9, abs=1e-9)
         assert battery_out(out) == pytest.approx(r["discharge"], rel=1e-9, abs=1e-9)
         assert grid_out(out) == pytest.approx(r["imp"], rel=1e-9, abs=1e-9)
@@ -1062,10 +948,10 @@ def test_every_sink_fills_exactly_regardless_of_consistency():
         grid = rng.uniform(-5000.0, 5000.0)
         house = rng.uniform(0.0, 9000.0)
         tesla = rng.uniform(0.0, 7000.0)
-        aircon = rng.uniform(0.0, 3000.0)
+        eps = rng.uniform(0.0, 3000.0)
         fridge = rng.uniform(0.0, 500.0)
-        r = readings(solar, battery, grid, house, tesla, aircon, fridge)
-        out = flows(solar, battery, grid, house, tesla, aircon, fridge)
+        r = readings(solar, battery, grid, house, tesla, eps, fridge)
+        out = flows(solar, battery, grid, house, tesla, eps, fridge)
         s2e = min(r["solar"], r["exp"])
         if (r["solar"] - s2e) + r["discharge"] + r["imp"] <= 0.0:
             # The division guard: no source is left to attribute anything to, so
@@ -1249,8 +1135,6 @@ def test_sink_bounds_hold_across_the_operating_range(v):
 
 @pytest.mark.parametrize("v", [0.0, 1e-9, 1.0, 999.0, 2650.0, 5000.0, 6000.0])
 def test_sink_bounds_hold_with_the_air_con_taking_half_the_house(v):
-    """The same sweep with A = house/2, so the air-con carve-out is live at
-    every scale rather than only in the hand-written cases."""
     out = flows(v, v / 2.0, v / 4.0, v, 0.0, v / 2.0)
     r = readings(v, v / 2.0, v / 4.0, v, 0.0, v / 2.0)
     assert_non_negative(out)
@@ -1411,26 +1295,6 @@ def test_repeated_decomposition_does_not_drift():
 
 
 def test_the_total_credited_matches_the_law_on_every_random_sample():
-    """The strongest single statement this file makes about v2.
-
-    v1 needed a soft ETA_FLOOR headroom bound here, because solar absorbed a
-    fitted residual and no exact statement was available. v2 has one: the
-    eighteen flows sum to `total_spent_law(r)` -- derived from the brief, recomputed here
-    from the readings alone -- on every input, with no tolerance band and no
-    fitted constant anywhere in it.
-
-    The four channels varied here are drawn uniformly and independently, which
-    produces far
-    more internally inconsistent samples than the real inverter ever does. Tesla
-    and air con are held at zero on purpose: this test is about the three
-    mechanisms below, and the device carve-outs are exercised against the same
-    law by test_source_and_sink_bounds_hold_across_a_small_grid and the air-con
-    section above. That
-    is deliberate: it drives all three mechanisms (the export cap, the loss
-    clamp, the division guard) hard, and the assertion holds through all of
-    them. The counters below fail the test if a run stops reaching a mechanism,
-    so this cannot quietly decay into a test of the easy path.
-    """
     rng = random.Random(20260830)
     clamped = capped = guarded = 0
     for _ in range(5000):

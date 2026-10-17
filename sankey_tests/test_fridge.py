@@ -26,18 +26,18 @@ def fridge_templates():
     return templates, sensors[0]["availability"]
 
 
-@pytest.mark.parametrize("tesla,aircon,fridge,expected", [
-    (600, 250, 100, (600, 250, 100, 50)),
-    (600, 250, 9000, (600, 0, 400, 0)),
-    (600, 400, 100, (600, 300, 100, 0)),
-    (1200, 400, 100, (1000, 0, 0, 0)),
-    (600, 9000, 100, (600, 300, 100, 0)),
+@pytest.mark.parametrize("tesla,eps,fridge,expected", [
+    (600, 250, 100, (600, 250, 100, 300)),
+    (600, 250, 9000, (600, 250, 400, 0)),
+    (600, 400, 100, (600, 400, 100, 300)),
+    (1200, 400, 100, (1000, 400, 0, 0)),
+    (600, 9000, 100, (600, 9000, 100, 300)),
     (-10, -20, -30, (0, 0, 0, 1000)),
 ])
-def test_fridge_is_carved_after_tesla_before_aircon(tesla, aircon, fridge, expected):
-    r = flows.readings(2000, -500, 300, 1000, tesla, aircon, fridge)
+def test_fridge_is_carved_after_tesla_with_eps_separate(tesla, eps, fridge, expected):
+    r = flows.readings(2000, -500, 300, 1000, tesla, eps, fridge)
     assert tuple(r[k] for k in ("tesla", "aircon", "fridge", "house_rest")) == expected
-    assert sum(expected) == r["house"]
+    assert expected[0] + expected[2] + expected[3] == r["house"]
 
 
 @pytest.mark.parametrize("args", [
@@ -57,7 +57,7 @@ def test_fridge_templates_match_both_independent_reference_and_python(fridge_tem
     assert rendered == pytest.approx(flows.decompose(*args), abs=parity.PARITY_W)
 
 
-@pytest.mark.parametrize("reading", (parity.ABSENT,) + parity.AIRCON_FALLS_BACK_TO_ZERO)
+@pytest.mark.parametrize("reading", (parity.ABSENT,) + parity.FRIDGE_FALLS_BACK_TO_ZERO)
 def test_missing_or_unavailable_fridge_stays_inside_house(fridge_templates, reading):
     templates, availability = fridge_templates
     args = (3000, -500, 400, 2600, 900, 500)
@@ -66,16 +66,16 @@ def test_missing_or_unavailable_fridge_stays_inside_house(fridge_templates, read
     assert got == zero
     assert all(got[k] == 0 for k in parity.FRIDGE_KEYS)
     assert parity.FRIDGE_ENTITY not in availability
-    assert availability.count("sensor.") == 5
+    assert availability.count("sensor.") == 6
 
 
-@pytest.mark.parametrize("reading", parity.AIRCON_CLAMPED_NOT_ZERO)
+@pytest.mark.parametrize("reading", parity.FRIDGE_CLAMPED_NOT_ZERO)
 def test_enormous_fridge_reading_is_clamped_to_what_tesla_left(fridge_templates, reading):
     templates, availability = fridge_templates
     got = parity.render(templates, availability, 0, 0, 1200, 1000, 600, 250, reading)
     assert got["grid_to_fridge"] == 400
     assert got["grid_to_tesla"] == 600
-    assert got["grid_to_aircon"] == 0
+    assert got["grid_to_aircon"] == 250
     assert got["grid_to_house"] == 0
 
 
@@ -95,36 +95,32 @@ def test_fridge_preserves_tesla_inverter_and_combined_house_split(s, b, g, h, t,
         assert got[source + "_to_house"] + got[source + "_to_fridge"] + got[source + "_to_aircon"] == pytest.approx(
             before[source + "_to_house"] + before[source + "_to_aircon"], abs=1e-9)
     r = flows.readings(*args)
-    assert r["house_rest"] + r["tesla"] + r["aircon"] + r["fridge"] == pytest.approx(h)
+    assert r["house_rest"] + r["tesla"] + r["fridge"] == pytest.approx(h)
 
 
-@pytest.mark.parametrize("aircon", [0, 100, 300, 400, 9000])
-def test_aircon_overshoot_cannot_starve_fridge_on_any_source(fridge_templates, aircon):
+@pytest.mark.parametrize("eps", [0, 100, 300, 400, 9000])
+def test_eps_does_not_move_fridge_or_house(fridge_templates, eps):
     templates, availability = fridge_templates
     args = (1500, -500, 1000, 1000, 600)
     before = flows.decompose(*args, 0, 100)
-    got = flows.decompose(*args, aircon, 100)
-    rendered = parity.render(templates, availability, *args, aircon, 100)
+    got = flows.decompose(*args, eps, 100)
+    rendered = parity.render(templates, availability, *args, eps, 100)
     for source in flows.SOURCES:
-        for sink in ("tesla", "fridge"):
+        for sink in ("house", "tesla", "fridge"):
             key = source + "_to_" + sink
             assert got[key] == before[key]
             assert rendered[key] == pytest.approx(before[key], abs=parity.PARITY_W)
-        key = source + "_to_inverter"
-        assert got[key] == pytest.approx(before[key], abs=1e-9)
+        assert got[source + "_to_inverter"] <= before[source + "_to_inverter"]
     totals = flows.node_totals(got)
-    assert totals["fridge"] == pytest.approx(100)
-    assert totals["aircon"] == pytest.approx(min(aircon, 300))
-    assert totals["house"] == pytest.approx(max(0, 300 - aircon))
+    assert totals["aircon"] == pytest.approx(eps)
+    assert totals["house"] == pytest.approx(300)
 
 
 def test_optional_channel_blindness_follows_the_carve_out_order():
-    assert flows.DEPENDS_ON["fridge"] == frozenset(
-        ("solar", "battery", "grid", "house", "tesla", "fridge"))
-    assert flows.DEPENDS_ON["aircon"] == frozenset(flows.CHANNELS)
-    for channel, sinks in (("tesla", ("house", "tesla", "fridge", "aircon")),
-                           ("fridge", ("house", "fridge", "aircon")),
-                           ("aircon", ("house", "aircon"))):
+    assert flows.DEPENDS_ON["aircon"] == frozenset(("solar", "battery", "grid", "eps"))
+    for channel, sinks in (("tesla", ("house", "tesla", "fridge")),
+                           ("fridge", ("house", "fridge")),
+                           ("eps", ("aircon", "inverter"))):
         dead = set(flows.FLOWS) & flows.unreportable((channel,))
         assert dead == {source + "_to_" + sink
                         for source in flows.SOURCES for sink in sinks}
@@ -172,4 +168,4 @@ def test_recorded_fridge_hold_is_refused_and_combined_house_remains_measurable(d
     assert replay.derived(r["flows"])["fridge"] == 0
     assert "fridge" in replay.unknowable(doc)
     assert set(parity.FRIDGE_KEYS) <= replay.blind_flows(doc)
-    assert "house_and_aircon_fridge" not in replay.unknowable(doc)
+    assert "house_and_fridge" not in replay.unknowable(doc)

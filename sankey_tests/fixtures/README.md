@@ -32,12 +32,12 @@ Re-capture with:
 
     uv run --no-project python fixtures/capture.py 2026-08-31 2026-09-01
 
-## Appliance channels (2026-10-11)
+## Appliance channels (2026-10-17)
 
-These captures contain neither air-con nor fridge power readings. The offline
-replay holds both at zero to run the arithmetic and marks both blind, with
-`aircon_assumed_s` and `fridge_assumed_s` covering the live window. House,
-Air con and Fridge are refused individually. `house_and_aircon_fridge` is the
-knowable total excluding Tesla; it keeps the counter reconciliations honest.
-The synthetic DAY and BALANCED_PROFILE in the layout and chart tests do carry
-nonzero fridge power. No recorded sample was backfilled.
+These captures contain neither EPS nor fridge power. Hold both at zero for
+arithmetic and mark them blind, counting `eps_assumed_s` and `fridge_assumed_s`.
+House and Fridge individually are refused, but `house_and_fridge` remains
+knowable excluding Tesla. EPS is separate from register 33147: Air con,
+Inverter and source-spent totals require EPS and are refused. House + Tesla +
+Fridge equals House load even with a blind Tesla. Synthetic profiles exercise
+EPS and fridge; no recorded samples were backfilled.

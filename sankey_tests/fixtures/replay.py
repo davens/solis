@@ -1,22 +1,8 @@
-"""Offline replay engine: recorded 10 s power history -> integrated daily flows.
-
-Pure stdlib, no network. Used by test_history_replay.py and runnable directly
-to print the reconciliation table:
-
-    uv run --no-project python fixtures/replay.py
-
-`flows.decompose()` takes seven channels; these captures carry at most five, and
-**none of them carries air con or fridge at all**. A channel with no reading is BLIND, not
-zero: it is held at 0 W so the arithmetic can run, and every quantity that
-reading could have moved is reported as None instead of as a number. See
-`blind_channels()`, `unknowable()` and `blind_flows()`, which delegate the
-dependency rules to `flows.unreportable()` rather than restating them.
-
-What survives a blind channel is the useful part. `Hr + A + F == house_load - T` for
-every A, so House + Air con + Fridge is knowable even with no air-con reading at all, and
-it is what the counter reconciliations face; only the SPLIT between House and
-Air con is refused. Same shape as `Hr + T == house_load` surviving a dead Tesla
-sensor.
+"""Offline replay of recorded power history, with blind-channel reporting.
+Captures lack EPS and fridge: both are held at zero for arithmetic only.
+House + Fridge = H - T is knowable when Tesla is known; House + Tesla +
+Fridge = H always. EPS blindness refuses Air con, Inverter and source-spent
+totals. Export and battery-charge totals remain knowable. Updated 2026-10-17.
 """
 import gzip
 import json
@@ -35,28 +21,10 @@ CHANNELS = ("solar", "battery", "grid", "house")
 # doc still replays exactly as it did before.
 CHANNELS_V2 = CHANNELS + ("tesla",)
 
-# The sixth channel `flows.decompose()` now takes. **No recorded fixture carries
-# it and none ever will**: the air-con channel is derived from the LG ThinQ
-# hourly energy counter, which nothing was differentiating when these four days
-# were captured. There is no air-con series to merge, and inventing one -- or
-# zero-filling it and reporting the result -- would fabricate exactly the class
-# of number CLAUDE.md's "a zeroed reading is indistinguishable from a still
-# night" rule forbids.
-#
-# So `aircon` is BLIND on every replayed day, in precisely the sense
-# `flows.unreportable()` means: it is held at 0 W so the arithmetic can run, and
-# every quantity that reading could have moved is refused rather than reported.
-# That is the same ruling 2026-08-27's Tesla already gets, reached the same way.
-#
-# Pinning it at 0 and reporting House as a measurement was considered and
-# REJECTED on 2026-09-11: it reads the harness's own input back out as though it
-# were data, and the four recorded days really did have an air-con load that
-# nobody was measuring. Refusing costs nothing, because House + Air con + Fridge is
-# knowable for every A and carries every reconciliation at full strength.
-ALL_CHANNELS = CHANNELS_V2 + ("aircon", "fridge")
+ALL_CHANNELS = CHANNELS_V2 + ("eps", "fridge")
 
 # The watts fed to the blind channel. A hold, not a reading.
-AIRCON_HOLD_W = 0.0
+EPS_HOLD_W = 0.0
 FRIDGE_HOLD_W = 0.0
 
 
@@ -66,11 +34,6 @@ def channels_of(doc):
 
 
 def blind_channels(doc):
-    """The decompose() input channels this doc has NO reading for.
-
-    Always includes `aircon` and `fridge`; includes `tesla` too for a four-channel doc. Feed
-    it to `flows.unreportable()` to find out what must be reported as None.
-    """
     return frozenset(ALL_CHANNELS) - frozenset(channels_of(doc))
 
 # HA's `integration` platform re-integrates at least this often when
@@ -157,14 +120,13 @@ def replay(doc, decompose, end_epoch=None, max_sub_interval=MAX_SUB_INTERVAL_S):
     flows = {}
     raw = {"solar": 0.0, "house": 0.0, "grid_import": 0.0, "grid_export": 0.0,
            "battery_charge": 0.0, "battery_discharge": 0.0,
-           # DC-side power delivered into the inverter minus the AC-side power it
-           # must have produced. Positive = conversion/aux loss. See CLAUDE.md:
-           # solar and battery are DC, house and grid are AC.
+           # H-only residual: includes unmeasured EPS as well as conversion/aux
+           # loss. This diagnostic cannot measure inverter loss without EPS.
            "dc_ac_residual": 0.0}
     gap_s = 0.0
     live_s = 0.0
     tesla_assumed_s = 0.0
-    aircon_assumed_s = 0.0
+    eps_assumed_s = 0.0
     fridge_assumed_s = 0.0
     five = "tesla" in channels_of(doc)
     for _t, dt, v in intervals(doc, end_epoch, max_sub_interval):
@@ -195,18 +157,14 @@ def replay(doc, decompose, end_epoch=None, max_sub_interval=MAX_SUB_INTERVAL_S):
             # runs on the same assumption rather than part of it.
             tesla = 0.0
             tesla_assumed_s += dt
-        # No capture carries air con, so EVERY live second of EVERY day runs on
-        # the hold -- see ALL_CHANNELS. The count is returned for the same
-        # reason tesla_assumed_s is: it is the number that stops the Air con
-        # node's zero being mistaken for a measured zero.
-        aircon_assumed_s += dt
+        eps_assumed_s += dt
         fridge_assumed_s += dt
-        out = decompose(solar, battery, grid, house, tesla, AIRCON_HOLD_W, FRIDGE_HOLD_W)
+        out = decompose(solar, battery, grid, house, tesla, EPS_HOLD_W, FRIDGE_HOLD_W)
         for k, w in out.items():
             flows[k] = flows.get(k, 0.0) + w * h
     return {"flows": flows, "raw": raw, "gap_s": gap_s, "live_s": live_s,
             "tesla_assumed_s": tesla_assumed_s,
-            "aircon_assumed_s": aircon_assumed_s,
+            "eps_assumed_s": eps_assumed_s,
             "fridge_assumed_s": fridge_assumed_s,
             "blind_channels": blind_channels(doc)}
 
@@ -239,13 +197,7 @@ def derived(flows):
             "tesla": sum(flows[s + "_to_tesla"] for s in src),
             "aircon": sum(flows[s + "_to_aircon"] for s in src),
             "fridge": sum(flows[s + "_to_fridge"] for s in src),
-            # House with the air con put back. Blind to the air-con channel --
-            # Hr + A + F == house_load - T whatever A is -- and therefore the
-            # knowable half of the pair on every day replayed here. This is what
-            # faces `house_consumption_today` minus the car; `house` alone does
-            # not, and `unknowable()` refuses it.
-            "house_and_aircon_fridge": sum(flows[s + "_to_house"] for s in src)
-                                + sum(flows[s + "_to_aircon"] for s in src)
+            "house_and_fridge": sum(flows[s + "_to_house"] for s in src)
                                 + sum(flows[s + "_to_fridge"] for s in src),
             "inverter": sum(flows[s + "_to_inverter"] for s in src),
             "grid_export": flows["solar_to_export"],
@@ -265,12 +217,6 @@ def derived(flows):
     }
 
 
-# Each derived() key named as the quantity `flows.DEPENDS_ON` knows it by, so a
-# blind channel can be turned into a list of derived() keys to refuse without
-# either side restating the other's dependency rules. `house_and_aircon_fridge` has no
-# DEPENDS_ON entry of its own because it is a sum of two of them; it depends on
-# whatever they both depend on MINUS the channel that only moves energy between
-# them, which is exactly `aircon` and `fridge`.
 DERIVED_QUANTITY = {
     "house": "house",
     "tesla": "tesla",
@@ -297,22 +243,12 @@ def unknowable(doc):
     blind = blind_channels(doc)
     dead = flows.unreportable(blind)
     out = set(k for k, q in DERIVED_QUANTITY.items() if q in dead)
-    # House + Air con + Fridge is the sum of two refused halves and is NOT itself
-    # refused: `Hr + A + F == house_load - T` for every A, so the air-con channel
-    # cannot move it. It falls only to a channel House depends on for some
-    # OTHER reason -- `tesla` on a four-channel doc, say.
-    if (flows.DEPENDS_ON["house"] - {"aircon", "fridge"}) & blind:
-        out.add("house_and_aircon_fridge")
+    if (flows.DEPENDS_ON["house"] - {"fridge"}) & blind:
+        out.add("house_and_fridge")
     return frozenset(out)
 
 
 def blind_flows(doc):
-    """Individual FLOWS keys this doc's blind channels make unreportable.
-
-    A superset of the node-level refusals: on a day with no air-con reading the
-    three `*_to_house` and three `*_to_aircon` ribbons are each unknowable even
-    though their pairwise sums are not.
-    """
     import flows  # local: this module is otherwise import-free stdlib
     return frozenset(q for q in flows.unreportable(blind_channels(doc))
                      if "_to_" in q)
@@ -345,13 +281,8 @@ if __name__ == "__main__":
         r = replay(doc, decompose, end_epoch=end)
         d = derived(r["flows"])
         dead = unknowable(doc)
-        # The raw integral each quantity faces. `house_and_aircon_fridge` faces
-        # house_load minus the car, because that is what it IS: the air con is
-        # still inside it, so comparing it against the full house_load would
-        # double-count the Tesla, and comparing it against `house` alone would
-        # need an air-con reading nobody has.
         rawv = dict(r["raw"])
-        rawv["house_and_aircon_fridge"] = r["raw"]["house"] - r["raw"].get("tesla", 0.0)
+        rawv["house_and_fridge"] = r["raw"]["house"] - r["raw"].get("tesla", 0.0)
         # The reportable House figure is house-excluding-car, so the counter it
         # faces is house_consumption_today MINUS the car. Against the raw
         # counter it would read as a 22 kWh error on a heavy charging day.
@@ -361,23 +292,19 @@ if __name__ == "__main__":
             day, "(PARTIAL)" if partial else "", r["gap_s"],
             r["gap_s"] + r["live_s"],
             ", ".join(sorted(r["blind_channels"])) or "none"))
-        print("  (house+aircon rows are house-excluding-car on both sides; "
-              "aircon and fridge are held at %g W and refused)" % AIRCON_HOLD_W)
+        print("  (house+fridge rows are house-excluding-car on both sides; "
+              "aircon and fridge are held at %g W and refused)" % EPS_HOLD_W)
         print("  %-18s %8s %8s %8s %8s" % ("quantity", "flows", "counter", "raw-int", "err%"))
-        for k in ("house", "aircon", "fridge", "house_and_aircon_fridge", "grid_export",
+        for k in ("house", "eps", "fridge", "house_and_fridge", "grid_export",
                   "grid_import", "battery_charge", "battery_discharge",
                   "solar"):
-            # A quantity a blind channel could have moved is printed as n/a, not
-            # as a number with a footnote. `house` and `aircon` are n/a on every
-            # day here; `house_and_aircon_fridge` -- which no air-con reading can move
-            # -- is the figure that still faces the counter.
             if k in dead:
                 print("  %-18s %8s %8s %8s %8s   (blind: %s)" % (
                     k, "n/a", "n/a", "n/a", "n/a",
                     ", ".join(sorted(r["blind_channels"]))))
                 continue
             c = counters[day][COUNTER_KEY[k]]["max"] if k in COUNTER_KEY else None
-            if k == "house_and_aircon_fridge":
+            if k == "house_and_fridge":
                 # The one quantity with no COUNTER_KEY of its own: it faces
                 # house_consumption_today MINUS the car, which is the only
                 # figure on the counter side that means the same thing.
@@ -393,7 +320,8 @@ if __name__ == "__main__":
         print("  flows: " + ", ".join(
             "%s=%s" % (k, "n/a" if k in dead_flows else "%.3f" % v)
             for k, v in sorted(r["flows"].items())))
-        print("  dc/ac residual from power sensors: %+.3f kWh" % r["raw"]["dc_ac_residual"])
+        print("  H-only residual (includes unmeasured EPS): %+.3f kWh"
+              % r["raw"]["dc_ac_residual"])
         c = counters[day]
         cres = ((c["solar_today"]["max"] - c["battery_charge_today"]["max"]
                  + c["battery_discharge_today"]["max"])
@@ -402,5 +330,5 @@ if __name__ == "__main__":
         print("  dc/ac residual from counters:      %+.3f kWh" % cres)
         print("  flows vs RAW INTEGRAL err%%: " + ", ".join(
             "%s=%s" % (k, "n/a" if k in dead else "%+.2f" % pct(d[k], rawv[k]))
-            for k in ("house_and_aircon_fridge", "grid_export", "grid_import",
+            for k in ("house_and_fridge", "grid_export", "grid_import",
                       "battery_charge", "battery_discharge", "solar")))

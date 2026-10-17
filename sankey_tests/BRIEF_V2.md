@@ -53,8 +53,8 @@ Replaces v1's sequential greedy decompose entirely. Per 10 s sample:
   H  = max(0, house_load)
   T  = min(max(0, tesla_home_charging_power), H)
   F  = min(max(0, fridge_power), H - T)
-  A  = min(max(0, aircon_power), H - T - F)
-  Hr = H - T - F - A
+  A  = max(0, eps)
+  Hr = H - T - F
   L  = max(0, (S + B + G) - (Hr + T + A + F + C + E))     # the Inverter node
 
   step 1  export is structurally solar-only:   s2e = min(S, E);  S1 = S - s2e
@@ -80,8 +80,8 @@ Inverter, not into a house drawing nothing. t-regimes measured the v1 clamp at u
 -8.3% on import; it is not shipping and is not needed.
 
 The Inverter node is the residual made EXPLICIT and NAMED. The owner is clear: a named
-loss node is wanted, an "Unaccounted" node is not. Expect ~2.5 kWh/day -- cross-check
-against flow-law's fitted parasitic (AC = 0.9974*DC - 105.9 W, ~106 W fixed).
+loss node is wanted, an "Unaccounted" node is not. The historical ~2.5 kWh/day residual included unmeasured EPS; it is not a
+post-change loss target. Compare cautiously against flow-law's fitted parasitic (AC = 0.9974*DC - 105.9 W, ~106 W fixed).
 Report the number; do not tune anything to hit it.
 
 ## 3. Section 2
@@ -121,10 +121,10 @@ Owner green-lit the compute: "the ha green has spare compute".
   sensor.solis_inverter_solar_power          W, DC, >=0
   sensor.solis_inverter_battery_power        W, DC, + charging / - discharging
   sensor.solis_inverter_grid_power           W, AC, + importing / - exporting
-  sensor.solis_inverter_house_load           W, AC, includes Tesla, air con AND fridge
+  sensor.solis_inverter_house_load           W, AC, includes Tesla and fridge; excludes EPS
   sensor.tesla_home_charging_power           W, AC (template, V*I gated 180-280 V)
   sensor.house_load_excluding_car            W, AC (template, already exists)
-  sensor.aircon_power                        W, AC (held template average -- see section 13)
+  sensor.solis_inverter_backup_load          W, AC, separate EPS output (33148)
   sensor.fridge_power                        W, AC (ZHA smart plug, ~10 s cadence)
 
 Tesla power is a TeslaMate on-change value: it can hold flat for up to ~80 min at a
@@ -265,140 +265,35 @@ v2-invariants. Everyone else consumes it and does not edit it.
 No test may re-declare the layout. Import NODES/LINKS from layout_v2.py, so the chart
 tests cannot drift from what actually ships.
 
-## 13. Air con is an HOURLY channel, and that is the whole of its cost
+## 13. Measured EPS outside House (2026-10-17)
 
-Every other channel is a real 10 s power reading. The air con is not, and cannot
-be: `lg_thinq` publishes **no power entity at all**. Checked in the entity
-registry on 2026-09-11 -- twelve air-con entities, not one of them power, and not
-even a disabled-by-default one to enable. What it does publish is
-`sensor.living_room_air_conditioner_energy_today`, in Wh.
+Owner-stated: EPS supplies the air con plus a few-watt charger; other loads are
+rare. The node remains Air con and all `*_to_aircon` keys/helper ids stay stable.
+Owner-supplied verified facts: House register 33147 excludes EPS; backup register
+33148 supplies `sensor.solis_inverter_backup_load`, non-negative AC W, measurement
+state class, about 10 s polling in the same block and availability as House.
+The supplied live balance gives 421 W residual after subtracting 383 W EPS,
+versus 804 W before, with about 88% charging efficiency. An hourly regression
+since 2026-10-11 found a 1.00 W residual increase per LG-derived air-con watt
+(95% CI 0.90–1.11), without a House increase. These observations were not
+repeated by the offline tests; treating all EPS as air con is the owner's
+practical circuit attribution.
 
-`sensor.aircon_power` is now a **trigger-based template sensor** in the HA package
-`/config/packages/aircon_power.yaml`; a copy is kept at
-[`ha_packages/aircon_power.yaml`](../ha_packages/aircon_power.yaml). `lg_thinq`
-publishes no power entity for the unit, only `energy_today` in Wh. The monthly
-counter updates once a day and was rejected; the daily counter changes roughly hourly
-(measured over four days: 95 changes, median gap 3600 s).
+Allocate Tesla and fridge inside H; A = max(0, eps) is additional load, with no
+House cap. Hr + T + F = H, total load H + A. Inverter excludes EPS. The six
+strictly read guarded inputs are solar, battery, grid, House, Tesla and EPS.
+Only fridge uses float(0), leaving it inside House when unavailable.
 
-It replaced the UI `derivative` helper on **2026-10-11** because LG re-sends unchanged
-readings: each repeat counted as zero change, dropping power to 0 W partway through
-every hour. Two readings seconds apart also produced spikes up to **~1.4 MW**.
-On 2026-10-11 the Sankey credited **2.05 kWh** to air con against LG's **3.2 kWh**.
+EPS moves Air con and Inverter flows, not the House split. Tesla moves nine
+flows (House, Tesla, Fridge); fridge moves six (House, Fridge). Source-spent totals
+also depend on EPS because the residual can bind at zero.
 
-The new sensor converts each changed `energy_today` step into average power over the
-interval it covers and holds that value. Changes less than 15 minutes apart are
-merged into the next step. A drop is treated as the daily reset, using the new reading
-as energy used since the reset; the reset is now observed at about **00:14 local**.
-No step for **90 minutes** reads 0, and a step more than 20 hours after the last only re-baselines. It reads 0 until its first baseline after creation
-and restores its state and baseline across restarts, so the former claim of
-`unknown` for up to two hours after every restart no longer applies.
-
-**The accepted caveat remains: the split lags by up to an hour.** The held average
-describes the interval just past, so around sunrise and sunset that usage is attributed
-to the following interval's source mix. This lag does not itself change daily totals;
-clamping a held average against instantaneous House load can still limit the carve-out.
-
-Both `sensor.aircon_power` and `sensor.fridge_power` retain `| float(0)` and remain
-ABSENT from the availability guard, which still counts exactly five entities.
-A missing reading gives A = 0 or F = 0 and keeps that load inside House; the house
-total stays right and only the split is lost. The default covers only text Jinja
-cannot parse: `'inf'` and `'1e9'` parse, so the `[ AR, H - T - F ] | min` clamp
-contains air-con overshoots. Fridge has already been allocated and cannot be starved.
-
-The carve-out order is Tesla, Fridge, Air con:
-
-    T  = min(max(0, tesla), H)
-    F  = min(max(0, fridge), H - T)
-    A  = min(max(0, aircon), H - T - F)
-    Hr = H - T - F - A
-
-Best-measured first protects the direct fridge reading from an hourly air-con
-overshoot. Tesla ribbons remain numerically unchanged, and `Hr + T + F + A == H`
-keeps Inverter unchanged.
-
-**The blindness runs one way only.** F reads T; A reads T and F. Fridge ignores
-air con, and Tesla ignores both. `_ALLF` contains the source/House/Tesla channels
-plus fridge; `_ALLA` adds air con for House and air-con flows. A dead TeslaMate
-still unmoors **twelve of eighteen** flows, pinned by
-`test_exactly_twelve_flows_declare_a_dependency_on_the_tesla_channel`.
-A dead fridge channel unmoors nine flows and a dead air-con channel six.
-
-**L is unchanged in mathematics and ulp-accurate in floating point.** The Python
-reference and Jinja both sum `Hr + T + A + F + C + E` for the residual. Changing
-a split can introduce a sum-order artifact, not a real dependency. Keep both
-expressions aligned; empirical dependency checks use a 1e-9 threshold.
-
-### Both appliances are BLIND on replay; House+Air con+Fridge is knowable
-
-The four recorded days carry neither appliance series. `fixtures/replay.py` therefore
-holds both channels at 0 W and declares it **blind**: `blind_channels(doc)` returns
-`aircon` and `fridge` on every fixture day (plus `tesla` on 2026-08-27), and `unknowable(doc)`
-turns that into the refused `derived()` keys and refused `FLOWS` keys by
-delegating to `flows.unreportable()` -- there is no hand-written list on the
-replay side, so the two cannot drift.
-
-A held zero is an assumption, not a reading, and the harness says so: it reports
-`aircon_assumed_s` and `fridge_assumed_s` alongside `tesla_assumed_s` (on all four days it equals the
-whole window), and `__main__` prints `n/a (blind: ...)` for every refused row
-rather than a number. **House, Air con and Fridge individually are refused.** This is the
-same rule, and the same mechanism, as the Tesla on 2026-08-27 (section 11).
-
-**What makes this cost nothing is that the combined total is knowable even when no
-part is.** `Hr + A + F == house_load - T` identically, for any A whatsoever, because
-F and A are carved out of exactly what the Tesla left. So `derived()` gained
-`house_and_aircon_fridge`, and it is that quantity -- not House -- which now faces
-`house_consumption_today` minus the car. Every reconciliation the replay had
-before survives at its existing bound; only the claim that it was about *House*
-is withdrawn.
-
-An earlier draft of this section said to pin A at 0 and keep reporting House,
-on the reasoning that blinding would retire those reconciliations. **That was
-wrong and is recorded here so it is not re-proposed:** it misses the combined
-identity above, and it reports a House figure derived from an assumed input as
-though it were measured. The blind treatment is strictly better.
-
-Two pins keep it honest, and both would fail loudly if someone re-introduced the
-zero-fill:
-
-* `test_the_aircon_node_is_a_held_zero_and_is_never_reported_as_a_measurement` --
-  the node is exactly 0.000, the held time equals the window, and the quantity is
-  refused.
-* `test_seven_node_totals_are_provably_blind_to_the_aircon_reading` -- replay
-  each day twice, once at 0 W and once at `house_load - T`, and require the six
-  source/export/battery-in/inverter totals **plus Tesla plus Fridge plus House+Air con+Fridge** to
-  be bit-stable to 1e-9 across a whole day of real data, while House itself must
-  move by more than 0.5 kWh and the energy leaving House must equal the energy
-  arriving at Air con.
-
-The air con on those days was real and its hourly statistics still exist --
-575 / 549 / 238 / 327 Wh for 2026-08-27 to 30, against house days of roughly
-13-46 kWh. **Backfilling them into the fixtures is available and was not done.**
-The LG counter is flat within an hour, so it resamples to the capture's 5-minute
-grid as a piecewise-constant wattage without inventing anything, and that would
-provide the air-con channel (fridge would still be blind). Deferred, not rejected.
-
-The two SYNTHETIC fixtures are a different matter and DID gain an air-con column
--- `layout_v2`'s `DAY` and `chart_integration`'s `BALANCED_PROFILE`, non-zero on
-half their samples and never exceeding `house - tesla`. Without it the three new
-ribbons would have been exercised only at zero, which is coverage that looks
-complete and proves nothing. No recorded fixture was touched.
-
-### Greedy became node-order SENSITIVE, and that is a fact about the card
-
-Before the air con, `test_greedy_is_node_order_insensitive_HERE_and_still_wrong`
-recorded that on a balanced day the greedy v1 allocator gave the same picture
-whatever order the sources were walked in. **That is no longer true, and the
-change is not cosmetic.** With a third AC sink, House and Air con compete for the
-same supply: whichever source is walked first fills House, and a later one is
-left holding Air con. Measured on the balanced profile, the six source orderings
-produce **five distinct pictures** -- battery-out's 4.8 kWh goes entirely to
-House under one ordering and entirely to Air con under another, from identical
-energy.
-
-The test is inverted and strengthened rather than deleted: greedy is now asserted
-wrong in *every* ordering, and the same sweep with per-link `value:` entities is
-asserted to collapse to exactly one picture. That contrast is the whole argument
-for v2, and adding a sink made it sharper.
+Historical fixtures contain no EPS or fridge. Hold both at zero, count the held
+time as `eps_assumed_s` / `fridge_assumed_s`, and refuse affected measurements.
+`house_and_fridge` is knowable excluding the car (Hr + F = H - T), while
+Hr + T + F = H survives even a blind Tesla. Air con, Inverter and source-spent
+totals require EPS and must be refused. Export and battery-charge totals survive.
+Synthetic profiles include EPS and balance supply against H + A.
 
 ## 14. Running the tests: the cwd decides what you see
 
@@ -446,20 +341,10 @@ Fridge is a section-1 peer of Tesla and Air con, colour #14b8a6 teal. It reads
 `sensor.fridge_power`, real W from a ZHA smart plug with state_class measurement
 at roughly 10 s cadence; it is a direct power reading.
 
-Carve Tesla first, then Fridge, then Air con: F = min(max(0, fridge), H - T),
-A = min(max(0, aircon), H - T - F), Hr = H - T - F - A. Tesla flows are unchanged; Hr + T + F + A == H
-keeps Inverter unchanged. House keeps the name House. Fridge reads float(0),
-clamped >= 0, and is absent from the availability guard (still exactly five
-entities). Missing means F = 0 and leaves the fridge inside House.
-
-Three new flows, solar_to_fridge, battery_to_fridge and grid_to_fridge, use
-the same per-source shares and three-stage chains. The graph is ten nodes,
-eighteen links and 54 helpers. Twelve of eighteen flows depend on Tesla.
-House and Air con depend on all seven channels; Fridge stays blind to air con.
-
-No recorded fixture contains fridge readings. Hold it at zero for arithmetic,
-mark it blind, refuse the individual House and Fridge quantities, and reconcile
-House + Air con + Fridge instead. Synthetic DAY and BALANCED_PROFILE have
-nonzero fridge columns. Link-order tests exhaust each source's local order
-(7! + 5! + 6! = 5,880), exhaust all 30,240 node orders, and sample joint link
-and node orders; the full link-order product is 435,456,000 and is not run.
+Carve Tesla first, then Fridge: F = min(max(0, fridge), H - T), Hr = H - T - F.
+EPS is separate as described in section 13. Missing fridge means F = 0 and
+leaves it inside House. The graph remains ten nodes, eighteen links and 54 helpers.
+Synthetic DAY and BALANCED_PROFILE have nonzero fridge and EPS columns.
+Link-order tests exhaust each source's local order (7! + 5! + 6! = 5,880),
+exhaust all 30,240 node orders, and sample joint link and node orders; the full
+link-order product is 435,456,000 and is not run.

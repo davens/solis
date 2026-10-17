@@ -107,7 +107,7 @@ SINKS = (L.HOUSE, L.TESLA, L.AIRCON, L.FRIDGE, L.BAT_IN, L.EXPORT, L.INVERTER)
 # --------------------------------------------------------------------------
 
 
-def _prop(solar, battery, grid, house, tesla, aircon=0.0, fridge=0.0):
+def _prop(solar, battery, grid, house, tesla, eps=0.0, fridge=0.0):
     """flows.py's decomposition, keyed by (source id, sink id) for the layout.
 
     This is the shipping physics. The translation goes through
@@ -118,11 +118,11 @@ def _prop(solar, battery, grid, house, tesla, aircon=0.0, fridge=0.0):
     synthetic DAY passes a real profile, which is what exercises the three
     air-con ribbons through the allocator.
     """
-    out = flows.decompose(solar, battery, grid, house, tesla, aircon, fridge)
+    out = flows.decompose(solar, battery, grid, house, tesla, eps, fridge)
     return {pair: out[key] for pair, key in L.FLOW_KEY.items()}
 
 
-def _prop_ref(solar, battery, grid, house, tesla, aircon=0.0, fridge=0.0):
+def _prop_ref(solar, battery, grid, house, tesla, eps=0.0, fridge=0.0):
     """BRIEF_V2.md section 2 transcribed by hand, on one instantaneous sample.
 
     Kept as an independent second opinion on flows.py, not as a fallback. See
@@ -134,11 +134,9 @@ def _prop_ref(solar, battery, grid, house, tesla, aircon=0.0, fridge=0.0):
     g = max(0.0, grid)
     e = max(0.0, -grid)
     t = min(max(0.0, tesla), max(0.0, house))
-    # Best-measured first: car, direct fridge plug, held air-con average.
-    # Transcribe each clamp independently to catch a changed priority.
     f = min(max(0.0, fridge), max(0.0, house) - t)
-    a = min(max(0.0, aircon), max(0.0, house) - t - f)
-    hr = max(0.0, house - t - f - a)
+    a = max(0.0, eps)
+    hr = max(0.0, house) - t - f
     loss = max(0.0, (s + b + g) - (hr + t + a + f + c + e))
 
     s2e = min(s, e)
@@ -182,34 +180,15 @@ def _counters(samples):
     return out
 
 
-# One synthetic day with every regime the graph has to survive. Every sample
-# leaves a strictly positive residual for the Inverter node, so the flows sum
-# exactly to the counters and the layout tests can assert equality rather than
-# an envelope. The recorded days in section 4 are the ones that do not.
-#
-#   1-2  night: grid import, battery charging, Tesla on a 5 kW dispatch
-#   3    dawn: battery discharging into a small house load, no sun
-#   4-5  midday: strong sun, exporting, battery charging, Tesla on solar
-#   6-7  evening: sun fading, battery carrying the house, small import
-#   8    late: battery and grid together carrying a Tesla top-up
-#
-# The air-con column was added 2026-09-11 with the node. It runs through the
-# afternoon and evening and is off overnight, which is what an LG split unit
-# actually does, and it is non-zero in four of the eight samples so the three
-# air-con ribbons are exercised by every allocator test in this file rather
-# than passing trivially at zero. It never exceeds `house - tesla`, so the
-# A <= house - T clamp does not bite here -- flows.py owns that clamp and
-# test_flows.py owns testing it; this fixture is about the picture.
 DAY = [
-    # dt(s)  solar  battery   grid   house  tesla  aircon
     (3600.0, 0.0, 2500.0, 8300.0, 5700.0, 5000.0, 0.0, 80.0),
     (3600.0, 0.0, 2500.0, 3300.0, 700.0, 0.0, 0.0, 80.0),
     (3600.0, 0.0, -900.0, 0.0, 850.0, 0.0, 0.0, 80.0),
     (3600.0, 5800.0, 1500.0, -3500.0, 700.0, 0.0, 0.0, 80.0),
-    (3600.0, 6000.0, 0.0, -2000.0, 3900.0, 3200.0, 600.0, 80.0),
-    (3600.0, 900.0, -600.0, 300.0, 1550.0, 0.0, 700.0, 80.0),
-    (3600.0, 0.0, -1200.0, 400.0, 1550.0, 0.0, 700.0, 80.0),
-    (3600.0, 0.0, -3000.0, 1100.0, 4000.0, 3300.0, 500.0, 80.0),
+    (3600.0, 6000.0, 0.0, -1400.0, 3900.0, 3200.0, 600.0, 80.0),
+    (3600.0, 900.0, -600.0, 1000.0, 1550.0, 0.0, 700.0, 80.0),
+    (3600.0, 0.0, -1200.0, 1100.0, 1550.0, 0.0, 700.0, 80.0),
+    (3600.0, 0.0, -3000.0, 1600.0, 4000.0, 3300.0, 500.0, 80.0),
 ]
 
 # The live states main supplied for 2026-08-30. `house` and `tesla` here are the
@@ -333,14 +312,6 @@ def test_battery_out_precedes_grid_import():
 
 
 def test_derived_nodes_are_the_sum_of_their_inbound_meters():
-    """House, Tesla, Air con and Inverter have no counter of their own
-    (BRIEF_V2.md section 1); each is its three inbound flow meters.
-
-    Air con joined on 2026-09-11 and is built the same way as the other three
-    even though a `sensor.lg_..._energy` counter exists in HA. Pointing the node
-    at that counter instead would give a box whose height disagreed with the
-    three ribbons entering it, because the ribbons are the decomposition's
-    attribution of it and the counter is the meter."""
     for sink in (L.HOUSE, L.TESLA, L.AIRCON, L.INVERTER):
         node = _node(sink)
         inbound = [L.flow_meter(source, sink) for source in SOURCES]
@@ -397,22 +368,10 @@ def test_the_aircon_node_is_a_section_1_terminus_fed_by_exactly_three_links():
 
 
 def test_house_no_longer_contains_the_air_con():
-    """The carve-out, asserted on the config rather than assumed from flows.py.
-
-    House is the sum of its own three `flow_*_to_house_daily` meters and nothing
-    else. Those meters are the decomposition's House ribbons, which flows.py
-    computes as `Hr = house_load - T - A`, so the air con is already out of them
-    -- no `subtract_entities` is involved, and there must not be one. The v1
-    chart did carve the car out of House that way (CLAUDE.md, 2026-08-30), and
-    reintroducing the trick here would double-subtract.
-
-    House and Air con must also share no meter: one entity feeding both nodes
-    would put the same kilowatt-hours in two boxes.
-    """
-    house, aircon = _node(L.HOUSE), _node(L.AIRCON)
+    house, eps = _node(L.HOUSE), _node(L.AIRCON)
     assert "subtract_entities" not in house
     house_meters = [house["entity_id"]] + list(house["add_entities"])
-    aircon_meters = [aircon["entity_id"]] + list(aircon["add_entities"])
+    aircon_meters = [eps["entity_id"]] + list(eps["add_entities"])
     assert house_meters == [L.flow_meter(source, L.HOUSE) for source in SOURCES]
     assert aircon_meters == [L.flow_meter(source, L.AIRCON) for source in SOURCES]
     assert not set(house_meters) & set(aircon_meters)
@@ -502,7 +461,6 @@ def test_aircon_is_hot_pink_and_never_a_yellow_or_an_amber():
     assert colour == "#ff69b4"
     assert L.COLORS[L.AIRCON] == colour
     red, green, blue = (int(colour[1:][i:i + 2], 16) for i in (0, 2, 4))
-    # A yellow or an amber is red+green high with blue low. Air con must not be.
     assert not (red > 200 and green > 140 and blue < 80), (
         "%s is a yellow/amber and will blur into Solar's rgb(255,166,0)" % colour)
     solar_rgb = (255, 166, 0)
@@ -1083,14 +1041,6 @@ def _replay_states(day, tesla_watts=None, require_tesla=True):
                 if require_tesla:
                     continue
                 car = 0.0
-        # Air con is 0 W here and that is a HOLD, not a reading: no capture
-        # carries the channel (fixtures/replay.py, ALL_CHANNELS). It is safe
-        # for everything this section asserts, because none of those quantities
-        # can be moved by the air-con reading -- the sources, Export, Battery
-        # in, Inverter and Tesla are all provably blind to it, which
-        # test_replay_v2.py demonstrates on these same four days. What it is
-        # NOT safe for is a claim about House or Air con individually, and this
-        # section makes none.
         samples.append((dt, v["solar"], v["battery"], v["grid"], house,
                         min(max(0.0, car), max(0.0, house)), 0.0))
     return _states_for(samples)
@@ -1211,15 +1161,6 @@ def test_tesla_days_exclude_the_day_with_no_recorded_car_channel():
 
 @pytest.mark.parametrize("day", REPLAY_DAYS)
 def test_replay_totals_are_invariant_under_tesla(day):
-    """The same algebra as test_inverter_node_is_independent_of_tesla, but on
-    every sample of a recorded day, and this is the test that licences
-    `_replay_full`'s T = 0 fill.
-
-    Replay each day twice -- once with T forced to 0, once with T forced to the
-    whole house load -- and the Inverter node, every source's total spend, the
-    export flow and Battery in must come out bit-for-bit identical. Only the
-    House/Tesla split moves, which is precisely the class of figure excluded
-    for 2026-08-27."""
     zero, zero_flows, zero_counters = _replay_states(day, tesla_watts=0.0)
     full, full_flows, full_counters = _replay_states(day, tesla_watts=1e9)
 
@@ -1247,17 +1188,6 @@ def test_replay_totals_are_invariant_under_tesla(day):
 
 
 def test_inverter_node_is_independent_of_tesla():
-    """Why the 2026-08-27 Inverter figure survives that exclusion.
-
-    T only redistributes between the House and Tesla sinks: Hr = house - T, so
-    Hr + T = house whatever T is, and L = (S+B+G) - (Hr+T+C+E) therefore does
-    not contain T at all. The source shares depend only on S1, B and G. So the
-    Inverter node -- and every source's total spend -- is mathematically
-    invariant under any T in [0, house], and an absent car channel cannot bias
-    it in either direction.
-
-    This is an algebraic claim, so it is checked across the whole range rather
-    than at one point."""
     sample = (3600.0, 1500.0, -800.0, 2200.0, 3000.0)
     baseline = None
     for fraction in (0.0, 0.01, 0.25, 0.5, 0.75, 0.99, 1.0):
@@ -1616,7 +1546,7 @@ def test_polarity_survives_the_card():
     states, flows, counters = _states_for(samples)
     result = _alloc(states)
     assert counters[L.SOLAR] != counters[L.BAT_OUT] != counters[L.GRID_IN]
-    assert result.state(L.GRID_IN, L.HOUSE) > result.state(L.SOLAR, L.HOUSE) > \
+    assert result.state(L.GRID_IN, L.HOUSE) > result.state(L.SOLAR, L.HOUSE) >\
         result.state(L.BAT_OUT, L.HOUSE) > 0.0
     assert result.filled.get(L.EXPORT, 0.0) == 0.0
     assert result.filled.get(L.BAT_IN, 0.0) == 0.0

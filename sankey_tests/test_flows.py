@@ -96,12 +96,6 @@ import replay as rp  # noqa: E402
 
 
 def load_day(day):
-    """v2-suite's loader, plus the two sidecar extras I need.
-
-    Air con and Fridge are both blind in these recorded captures. Replay holds
-    both at zero for arithmetic and refuses their individual quantities; only
-    House + Air con + Fridge is the measured house load excluding the car.
-    """
     doc = rp.load_day(day, tesla=True)
     doc["tesla_counter"] = doc["tesla_counters"]["tesla_home_charging_energy"]
     path = os.path.join(FIX, "tesla_history_%s.json.gz" % day)
@@ -179,13 +173,7 @@ def counter_facing(f):
     """
     n = node_totals(f)
     return {
-        # house_consumption_today measures the WHOLE house, so every device
-        # carved out of the House node has to be added back: the Tesla and now
-        # the air con. n["aircon"] is identically zero over these fixtures (see
-        # load_day) -- it is written out anyway so that adding an air-con series
-        # to the fixtures cannot silently start understating this by the air
-        # con, which is the same 22 kWh trap the Tesla term is here to avoid.
-        "house": n["house"] + n["tesla"] + n["aircon"],
+        "house": n["house"] + n["tesla"] + n["fridge"],
         "grid_export": n["export"],
         "grid_import": n["grid_spent"],
         "battery_charge": n["battery_in"],
@@ -267,7 +255,7 @@ def test_no_flow_is_ever_negative():
 # 2. readings(): sign conventions and clamps
 # --------------------------------------------------------------------------
 
-def non_degenerate(solar, battery, grid, house, tesla, aircon=0.0):
+def non_degenerate(solar, battery, grid, house, tesla, eps=0.0):
     """Refuse a sign-test input that cannot detect a sign error.
 
     BRIEF_V2 section 9, and it bites harder under proportional allocation than
@@ -279,7 +267,7 @@ def non_degenerate(solar, battery, grid, house, tesla, aircon=0.0):
 
     Every sign test in this file routes through here.
     """
-    r = readings(solar, battery, grid, house, tesla, aircon)
+    r = readings(solar, battery, grid, house, tesla, eps)
     supply = (r["solar"], r["discharge"] + r["charge"], r["imp"] + r["exp"])
     if min(supply) <= 0.0:
         raise AssertionError(
@@ -289,7 +277,7 @@ def non_degenerate(solar, battery, grid, house, tesla, aircon=0.0):
         raise AssertionError(
             "degenerate sign input: equal sources are symmetric under "
             "inversion (%r)" % (supply,))
-    return (solar, battery, grid, house, tesla, aircon)
+    return (solar, battery, grid, house, tesla, eps)
 
 
 def test_the_non_degenerate_helper_refuses_a_zero_source():
@@ -380,68 +368,48 @@ def test_house_rest_is_never_negative_for_any_tesla_reading():
         assert r["tesla"] + r["house_rest"] == pytest.approx(1000.0)
 
 
-def test_aircon_is_carved_out_after_the_tesla():
-    """Order is load-bearing: T first, then A out of what T left.
-
-    The two channels come from completely different places -- TeslaMate's
-    on-change power and the LG hourly energy counter's held average -- so nothing
-    stops them summing past the house load. Carving the Tesla first is what
-    makes T blind to the air-con reading, which is the property flows.DEPENDS_ON
-    relies on to keep the Tesla figures on days the air-con channel is blind.
-    """
+def test_eps_is_separate_from_the_tesla_house_split():
     r = readings(0, 0, 0, 3000, 1800, 400)
-    assert r["tesla"] == 1800.0
-    assert r["aircon"] == 400.0
-    assert r["house_rest"] == 800.0
+    assert r["tesla"] == 1800
+    assert r["aircon"] == 400
+    assert r["house_rest"] == 1200
 
 
-def test_aircon_is_clamped_to_what_the_tesla_left():
-    r = readings(0, 0, 3000, 2000, 1500, 7000)
-    assert r["tesla"] == 1500.0
-    assert r["aircon"] == 500.0
-    assert r["house_rest"] == 0.0
+def test_eps_is_not_capped_by_what_tesla_left():
+    r = readings(0, 0, 10000, 2000, 1500, 7000)
+    assert r["aircon"] == 7000
+    assert r["house_rest"] == 500
 
 
-def test_aircon_clamps_to_zero_when_the_tesla_takes_the_whole_house():
-    """A stale 7 kW Tesla plateau leaves nothing for the air con to claim.
-
-    Without the second clamp A would be the raw reading and house_rest would go
-    negative by exactly that much.
-    """
-    r = readings(0, 0, 3000, 3000, 7000, 900)
-    assert r["tesla"] == 3000.0
-    assert r["aircon"] == 0.0
-    assert r["house_rest"] == 0.0
+def test_eps_survives_tesla_taking_the_whole_house():
+    r = readings(0, 0, 4000, 3000, 7000, 900)
+    assert r["tesla"] == 3000
+    assert r["aircon"] == 900
+    assert r["house_rest"] == 0
 
 
 def test_house_rest_is_never_negative_for_any_aircon_reading():
     for a in (-1e4, 0, 1, 999, 1000, 1001, 1e4):
         r = readings(0, 0, 0, 1000, 0, a)
-        assert r["house_rest"] >= 0.0
-        assert r["aircon"] + r["house_rest"] == pytest.approx(1000.0)
+        assert r["house_rest"] == 1000
+        assert r["aircon"] == max(0, a)
 
 
 def test_house_rest_is_never_negative_for_any_tesla_and_aircon_pair():
-    """Both clamps together, over the grid where each can out-read the house."""
     for t in (-1e4, 0, 400, 1000, 1e4):
         for a in (-1e4, 0, 400, 1000, 1e4):
             r = readings(0, 0, 0, 1000, t, a)
-            assert r["house_rest"] >= 0.0
-            assert r["aircon"] >= 0.0
-            assert r["tesla"] + r["aircon"] + r["house_rest"] == \
-                pytest.approx(1000.0)
+            assert r["house_rest"] >= 0
+            assert r["tesla"] + r["house_rest"] == 1000
+            assert r["aircon"] == max(0, a)
 
 
 def test_aircon_larger_than_the_house_load_fabricates_nothing():
-    """The whole house is air con and the House node goes to zero -- it must not
-    go negative, and no sink may receive more than the house actually drew."""
-    f = decompose(0, 0, 2000, 2000, 0, 9000)
-    assert f["grid_to_aircon"] == pytest.approx(2000.0)
-    assert f["grid_to_house"] == 0.0
-    assert node_totals(f)["aircon"] == pytest.approx(2000.0)
-    assert node_totals(f)["house"] == 0.0
-    assert node_totals(f)["inverter"] == 0.0
-    assert sum(f.values()) == pytest.approx(2000.0)
+    n = node_totals(decompose(0, 0, 12000, 2000, 0, 9000))
+    assert n["aircon"] == 9000
+    assert n["house"] == 2000
+    assert n["inverter"] == 1000
+    assert n["grid_spent"] == 12000
 
 
 def test_negative_aircon_is_clamped_not_rejected():
@@ -462,12 +430,6 @@ def test_aircon_with_no_supply_at_all_draws_nothing():
 
 
 def test_aircon_reading_cannot_move_any_tesla_flow():
-    """The asymmetry that keeps _ALL alive beside _ALLA in flows.DEPENDS_ON.
-
-    T is carved out before A, so the Tesla flows are blind to the air-con
-    channel -- which is what lets a day recorded before the air-con sensor
-    existed keep reporting every Tesla figure it always did.
-    """
     for args in [(3000, -500, 400, 2600, 900), (0, 900, 3000, 1800, 600),
                  (6000, 2000, -1500, 2000, 1200), (50, -20, 30, 60, 25)]:
         base = decompose(*args, 0)
@@ -479,26 +441,6 @@ def test_aircon_reading_cannot_move_any_tesla_flow():
 
 
 def test_tesla_reading_cannot_move_any_non_tesla_flow():
-    """The fact that makes 2026-08-27 recoverable, stated as an invariant.
-
-    T only ever splits the house sink. Hr + T == house for every T, the shares
-    depend on S1/B/G alone, and L depends on Hr + T rather than on either part.
-    So twelve of the eighteen flows with both appliance readings held at zero -- and each source's to_house + to_tesla sum --
-    are provably blind to the Tesla reading. A day whose Tesla channel does not
-    exist yet therefore loses ONLY the House/Tesla split, and keeps solar,
-    export, battery, grid and the Inverter node intact.
-
-    This is why the replay integrates 2026-08-27 with T = 0 for the T-invariant quantities and
-    returns None for everything downstream of the split, rather than discarding
-    the day.
-
-    AIR CON AND FRIDGE ARE HELD AT ZERO HERE ON PURPOSE, and the invariant is false without
-    that: A = min(aircon, house - T), so with a non-zero air-con reading moving
-    T squeezes A and the three air-con ribbons move with it. That is exactly
-    what flows.DEPENDS_ON declares -- the air-con flows list `tesla` among their
-    dependencies while the Tesla flows do not list `aircon` -- and
-    test_aircon_reading_cannot_move_any_tesla_flow pins the other half.
-    """
     blind = ("solar_to_house", "solar_to_tesla", "battery_to_house",
              "battery_to_tesla", "grid_to_house", "grid_to_tesla")
     for args in [(3000, -500, 400, 2600), (0, 900, 3000, 1800),
@@ -511,7 +453,7 @@ def test_tesla_reading_cannot_move_any_non_tesla_flow():
                     continue
                 assert b[k] == pytest.approx(a[k], abs=1e-9), k
             for src in flows.SOURCES:
-                assert (b[src + "_to_house"] + b[src + "_to_tesla"]) == \
+                assert (b[src + "_to_house"] + b[src + "_to_tesla"]) ==\
                     pytest.approx(a[src + "_to_house"] + a[src + "_to_tesla"],
                                   abs=1e-9), src
 
@@ -725,7 +667,7 @@ def test_pure_grid_import_into_nothing_goes_to_the_inverter():
 def test_inverter_loss_is_the_measured_residual():
     r = readings(2982, -457, -98, 3078, 0, 0.0)
     assert flows.inverter_loss(r) == pytest.approx(263.0)
-    assert node_totals(decompose(2982, -457, -98, 3078, 0, 0.0))["inverter"] == \
+    assert node_totals(decompose(2982, -457, -98, 3078, 0, 0.0))["inverter"] ==\
         pytest.approx(263.0)
 
 
@@ -761,18 +703,11 @@ def test_inverter_loss_excludes_tesla_double_counting():
     assert flows.inverter_loss(r) == pytest.approx(500.0)
 
 
-def test_inverter_loss_excludes_aircon_double_counting():
-    """house already contains the air con too, so Hr + T + A is just `house`.
-
-    Counting A on top of the house reading would invent 900 W of loss out of an
-    hourly-counter template -- and the air-con channel is the one most likely
-    to disagree with the 10 s house poll, because it holds one value for a whole
-    hour.
-    """
-    r = readings(0, 0, 8000, 7500, 0, 900)
-    assert flows.inverter_loss(r) == pytest.approx(500.0)
-    r = readings(0, 0, 8000, 7500, 6000, 900)
-    assert flows.inverter_loss(r) == pytest.approx(500.0)
+def test_owner_supplied_eps_balance_leaves_421_w_residual():
+    """The owner-supplied balance excludes measured EPS from the residual."""
+    r = readings(0, 2733, 11265, 7728, 0, 383)
+    assert flows.inverter_loss(r) == 421
+    assert node_totals(decompose(0, 2733, 11265, 7728, 0, 383))["house"] == 7728
 
 
 def test_inverter_node_is_shared_across_sources_proportionally():
@@ -1058,7 +993,7 @@ def test_only_proportional_spends_the_metered_import_exactly():
     makes that meter authoritative, which is a stronger constraint than
     charging the battery its own trickle loss.
     """
-    args = (3000, -40, 900, 3500, 0, 600)
+    args = (3000, -40, 1900, 3500, 0, 600)
     r = readings(*args)
     assert flows.inverter_loss(r) > 0.0
     assert node_totals(decompose(*args))["grid_spent"] == pytest.approx(r["imp"])
@@ -1126,18 +1061,13 @@ def test_house_node_excludes_tesla():
     assert n["tesla"] == pytest.approx(7000.0)
 
 
-def test_house_node_excludes_the_air_con_as_well_as_the_tesla():
-    """House is Hr, not `house`: both device nodes are carved out of it.
-
-    Dropping either carve-out double-counts that device -- it would be drawn as
-    its own node AND inside House -- which is the failure v1's third column had.
-    """
+def test_house_node_is_house_register_minus_tesla_with_eps_separate():
     f = decompose(0, 0, 8000, 7500, 4000, 3000)
     n = node_totals(f)
     assert n["tesla"] == pytest.approx(4000.0)
     assert n["aircon"] == pytest.approx(3000.0)
-    assert n["house"] == pytest.approx(500.0)
-    assert n["house"] + n["tesla"] + n["aircon"] == pytest.approx(7500.0)
+    assert n["house"] == pytest.approx(3500.0)
+    assert n["house"] + n["tesla"] + n["fridge"] == pytest.approx(7500.0)
 
 
 def test_source_spend_never_exceeds_the_source_reading_on_a_consistent_sample():
@@ -1167,18 +1097,16 @@ def test_sources_overspend_when_the_residual_clamps():
     r = readings(*args)
     assert flows.inverter_loss(r) == 0.0
     n = node_totals(decompose(*args))
-    # Both halves of the house still fill exactly -- the air-con carve-out does
-    # not soften the overspend, it just splits which sink displays it.
-    assert n["house"] == pytest.approx(900.0)
+    assert n["house"] == pytest.approx(1500.0)
     assert n["aircon"] == pytest.approx(600.0)
-    assert n["house"] + n["aircon"] == pytest.approx(1500.0)
-    assert n["grid_spent"] == pytest.approx(1500.0)  # ... at 1.5x the meter
+    assert n["house"] + n["aircon"] == pytest.approx(2100.0)
+    assert n["grid_spent"] == pytest.approx(2100.0)  # sinks exceed the meter
 
 
 def test_a_consistent_sample_leaves_no_source_overspent():
     args = (0, 0, 1500, 1000, 0, 400)
     r = readings(*args)
-    assert flows.inverter_loss(r) == pytest.approx(500.0)
+    assert flows.inverter_loss(r) == pytest.approx(100.0)
     n = node_totals(decompose(*args))
     assert n["grid_spent"] == pytest.approx(1500.0)
 
@@ -1288,18 +1216,9 @@ if given is not None:
     @settings(max_examples=300, suppress_health_check=[HealthCheck.too_slow])
     @given(POS, W, W, POS, POS, POS)
     def test_property_the_two_device_carve_outs_partition_the_house(s, b, g, h, t, a):
-        """Hr + T + A == house on EVERY sample, however the two readings lie.
-
-        This is what stops the House node double-counting a device, and it is
-        also the identity every "ignores tesla/aircon" entry in
-        flows.DEPENDS_ON rests on: L reads Hr + T + A, which is just `house`.
-        """
         r = readings(s, b, g, h, t, a)
-        assert r["house_rest"] >= 0.0
-        assert r["aircon"] >= 0.0
-        assert r["tesla"] >= 0.0
-        assert r["house_rest"] + r["tesla"] + r["aircon"] == pytest.approx(
-            r["house"], abs=1e-9)
+        assert r["house_rest"] + r["tesla"] == pytest.approx(r["house"], abs=1e-9)
+        assert r["aircon"] == max(0, a)
 
 
 # --------------------------------------------------------------------------
@@ -1407,32 +1326,26 @@ def test_a_tesla_blind_day_refuses_exactly_the_tesla_dependent_quantities(replay
     to protect two figures; reporting zeroes would fabricate them. This is the
     third option, and it is only safe because the map is verified."""
     r = replays["2026-08-27"]
-    assert r["blind_channels"] == frozenset(["tesla", "aircon", "fridge"])
+    assert r["blind_channels"] == frozenset(["tesla", "eps", "fridge"])
     assert r["tesla_assumed_s"] > 40_000
     rep = reportable(r)
 
-    # The air-con quantities join the refusal, and not for a hand-waved
-    # reason: A = min(aircon, house - T), so a blind Tesla channel makes the
-    # air-con split unknowable as well. flows.DEPENDS_ON says so, and this list
-    # is checked against it by the assertion below rather than trusted.
     for q in ("house", "tesla", "aircon", "solar_to_house", "solar_to_tesla",
               "solar_to_aircon", "solar_to_fridge", "battery_to_house", "battery_to_tesla",
               "battery_to_aircon", "battery_to_fridge", "grid_to_house", "grid_to_tesla",
               "grid_to_aircon"):
         assert rep[q] is None, q
-    assert {q for q, v in rep.items() if v is None} == \
-        flows.unreportable(["tesla", "aircon", "fridge"])
+    assert {q for q, v in rep.items() if v is None} ==\
+        flows.unreportable(["tesla", "eps", "fridge"])
     # ...and everything the Tesla channel provably cannot reach survives.
-    for q in ("solar_spent", "battery_spent", "grid_spent", "inverter",
-              "export", "battery_in", "solar_to_battery", "grid_to_battery",
-              "solar_to_inverter", "battery_to_inverter", "grid_to_inverter",
+    for q in ("export", "battery_in", "solar_to_battery", "grid_to_battery",
               "solar_to_export"):
         assert rep[q] is not None and rep[q] >= 0.0, q
 
     for day in TESLA_DAYS:
-        assert replays[day]["blind_channels"] == frozenset(["aircon", "fridge"])
+        assert replays[day]["blind_channels"] == frozenset(["eps", "fridge"])
         rep = reportable(replays[day])
-        assert {q for q, v in rep.items() if v is None} == flows.unreportable(["aircon", "fridge"])
+        assert {q for q, v in rep.items() if v is None} == flows.unreportable(["eps", "fridge"])
 
 
 def test_dependency_map_is_complete_and_minimal():
@@ -1462,7 +1375,7 @@ def test_dependency_map_is_complete_and_minimal():
         for i, channel in enumerate(flows.CHANNELS):
             alt = list(base)
             alt[i] = (rng.uniform(0, 7000)
-                      if channel in ("solar", "house", "tesla", "aircon", "fridge")
+                      if channel in ("solar", "house", "tesla", "eps", "fridge")
                       else rng.uniform(-6000, 6000))
             a = quantities(alt)
             for q in flows.DEPENDS_ON:
@@ -1681,58 +1594,38 @@ def test_the_five_minute_csv_agrees_with_the_replay_on_export():
 # 12. The measurement table (run the module directly)
 # --------------------------------------------------------------------------
 
-def _table():  # pragma: no cover - reporting, exercised by the tests above
-    counters = load_counters()
-    for rule in ("proportional", "band_table"):
-        flows.set_loss_rule(rule)
-        print("\n########## LOSS_RULE = %s ##########" % rule)
-        for day in DAYS:
-            r = replay_day(day)
-            f = r["flows"]
-            n = node_totals(f)
-            d = counter_facing(f)
-            print("\n=== %s%s  gap %.0f s%s ===" % (
-                day, " (PARTIAL)" if day == PARTIAL_DAY else "", r["gap_s"],
-                "  TESLA-BLIND %.0f s" % r["tesla_assumed_s"]
-                if r["blind_channels"] else ""))
-            print("  %-18s %8s %8s %8s %8s %8s" % (
-                "quantity", "flows", "counter", "err%", "raw-int", "vraw%"))
-            for k in ("solar", "grid_import", "grid_export", "battery_charge",
-                      "battery_discharge", "house"):
-                c = counters[day][COUNTER_KEY[k]]["max"]
-                e = pct(d[k], c)
-                raw = r["raw"][k]
-                ev = pct(d[k], raw)
-                print("  %-18s %8.3f %8.3f %8s %8.3f %8s" % (
-                    k, d[k], c, "%+.2f" % e if e is not None else "n/a", raw,
-                    "%+.2f" % ev if ev is not None else "n/a"))
-            tc = r["tesla_counter"]
-            tw = tc["last"] - tc["first"]
-            rep = reportable(r)
-            house, tesla = rep["house"], rep["tesla"]
-            if tesla is None:
-                print("  %-18s %8s %8.3f %8s   (BLIND: sensor created 13:28; "
-                      "CLAUDE.md records 8.384 kWh that night)"
-                      % ("tesla node", "REFUSED", tw, "n/a"))
-                print("  %-18s %8s   (unknowable while Tesla is blind)"
-                      % ("house node", "REFUSED"))
-            else:
-                print("  %-18s %8.3f %8.3f %8s   (power-integral %.3f)" % (
-                    "tesla node", tesla, tw,
-                    "%+.2f" % pct(tesla, tw) if tw else "n/a", r["raw"]["tesla"]))
-                print("  %-18s %8.3f  (house node, Tesla excluded)"
-                      % ("house node", house))
-            print("  %-18s %8.4f kWh over %d samples" % (
-                "unsourced export", r["unsourced_export"], r["unsourced_samples"]))
-            print("  %-18s %8.3f kWh" % ("INVERTER node", n["inverter"]))
-            if tesla is not None:
-                print("  tesla source split: grid %.3f  battery %.3f  solar %.3f" % (
-                    f["grid_to_tesla"], f["battery_to_tesla"], f["solar_to_tesla"]))
-            print("  source spend: solar %.3f  battery %.3f  grid %.3f" % (
-                n["solar_spent"], n["battery_spent"], n["grid_spent"]))
-            print("  inverter split: solar %.3f  battery %.3f  grid %.3f" % (
-                f["solar_to_inverter"], f["battery_to_inverter"], f["grid_to_inverter"]))
-    flows.set_loss_rule("proportional")
+def _table():
+    """Print reportable node and flow totals; held inputs are never measurements."""
+    previous = flows.LOSS_RULE
+    try:
+        for rule in ("proportional", "band_table"):
+            flows.set_loss_rule(rule)
+            print("\n########## LOSS_RULE = %s ##########" % rule)
+            for day in DAYS:
+                r = replay_day(day)
+                blind = ", ".join(sorted(r["blind_channels"]))
+                print("\n=== %s%s  gap %.0f s  blind: %s ===" % (
+                    day, " (PARTIAL)" if day == PARTIAL_DAY else "",
+                    r["gap_s"], blind))
+                print("  EPS held at 0 W for %.0f s; fridge held for %.0f s" % (
+                    r["eps_assumed_s"], r["fridge_assumed_s"]))
+                for quantity, value in sorted(reportable(r).items()):
+                    if value is None:
+                        print("  %-24s n/a (blind: %s)" % (quantity, blind))
+                    else:
+                        print("  %-24s %.4f kWh" % (quantity, value))
+    finally:
+        flows.set_loss_rule(previous)
+
+
+def test_measurement_table_refuses_eps_blind_quantities(capsys):
+    _table()
+    output = capsys.readouterr().out
+    for quantity in ("aircon", "inverter", "solar_spent", "battery_spent", "grid_spent"):
+        rows = [line for line in output.splitlines()
+                if line.strip().split()[:1] == [quantity]]
+        assert len(rows) == 2 * len(DAYS)
+        assert all("n/a (blind:" in row and "eps" in row for row in rows)
 
 
 if __name__ == "__main__":  # pragma: no cover

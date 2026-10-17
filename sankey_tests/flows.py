@@ -5,21 +5,16 @@ Supersedes ``decompose.py``. Seven live readings go in:
     solar    W, DC, >= 0
     battery  W, DC, positive charging / negative discharging
     grid     W, AC, positive importing / negative exporting
-    house    W, AC, >= 0, INCLUDING the Tesla, air con and fridge
+    house    W, AC, >= 0, INCLUDING Tesla and fridge, EXCLUDING EPS
     tesla    W, AC, >= 0, the home-charging template sensor
-    aircon   W, AC, >= 0, derived from the LG hourly energy counter
+    eps      W, AC, >= 0, measured backup-port load (register 33148)
     fridge   W, AC, >= 0, measured directly by a ZHA smart plug
 
 and eighteen non-negative watt figures come out, one per link of the graph.
 
-``aircon`` is the odd one. Every other channel is a real 10 s power reading;
-the LG ThinQ integration publishes no power entity at all, only an hourly
-energy counter, so the channel is a trigger-based template over that counter and therefore
-holds one value for a whole hour, describing the hour that has just finished.
-Nothing in this module knows or cares -- it is watts like any other -- but a
-reader of the resulting ribbons should: the air-con split is hourly and lags
-by up to an hour, while every other ribbon is sampled at 10 s. See
-BRIEF_V2.md section 13.
+EPS is a separate AC output, outside House (register 33147). The owner
+identifies it as air con plus a few-watt charger; the node and flow keys stay
+``aircon`` to preserve helper statistics history. Updated 2026-10-17.
 
 Why this module exists at all
 -----------------------------
@@ -65,7 +60,8 @@ What the numbers do and do not mean
   key at all -- those flows are unrepresentable, not merely computed as zero.
 * The Inverter node is a **residual, not a meter**. It absorbs the true
   conversion and housekeeping loss, and also every sensor-skew artefact: the
-  five readings are polled independently, so a step change lands there first.
+  readings can arrive at different times (House and EPS share a Modbus block),
+  so a step change lands there first.
   Over a day the skew averages out and what is left is real.
 * The shared loss is charged to sources *proportionally*. A battery trickling at
   40 W really does lose ~78% of it while solar at 4 kW loses ~2.5%, so
@@ -128,7 +124,7 @@ SINKS = ("house", "tesla", "aircon", "fridge", "battery", "export", "inverter")
 SOURCES = ("solar", "battery", "grid")
 
 # The seven input channels, in decompose()'s argument order.
-CHANNELS = ("solar", "battery", "grid", "house", "tesla", "aircon", "fridge")
+CHANNELS = ("solar", "battery", "grid", "house", "tesla", "eps", "fridge")
 
 # Which input channels each reportable quantity can actually be moved by.
 #
@@ -147,41 +143,31 @@ CHANNELS = ("solar", "battery", "grid", "house", "tesla", "aircon", "fridge")
 # matters as much as completeness: a map that declared every channel for every
 # quantity would be safe and useless, refusing all of 2026-08-27.
 #
-# The non-obvious entries, all consequences of Hr + T + A + F == house:
-#   *_to_battery   ignores house AND tesla -- C depends on battery alone, and
-#                  the shares on solar/battery/grid alone.
-#   *_to_inverter  ignores tesla, aircon AND fridge -- L reads Hr + T + A + F, which is
-#                  just `house`, never any one part of it.
-#   solar_spent    ignores tesla, aircon AND fridge -- to_house + to_tesla + to_aircon + to_fridge
-#                  is house * share, because Hr + T + A + F == house by construction.
-#   the six counter-facing quantities ALL ignore tesla, which is precisely what
-#   licenses keeping 2026-08-27's inverter reconciliation.
+# Hr + T + F == H; EPS is additional load. Residual and source totals
+# depend on EPS, while the House split does not. Source totals can move when
+# the non-negative residual binds, even though they conserve in balanced samples.
 _SBG = frozenset(("solar", "battery", "grid"))
 _SBGH = _SBG | {"house"}
 _ALL = _SBGH | {"tesla"}
 _ALLF = _ALL | {"fridge"}
-_ALLA = _ALLF | {"aircon"}
+_SBGE = _SBG | {"eps"}
+_SBGHE = _SBGH | {"eps"}
 
-# Best-measured loads go first: Tesla, then the direct fridge plug, then the
-# held hourly air-con average. Fridge reads T but ignores air con; Air con reads
-# both T and F. An air-con overshoot can consume only House rest, never Fridge.
-# Tesla remains blind to both appliance channels, keeping its ribbons unchanged.
 DEPENDS_ON = {
     "solar_to_export": frozenset(("solar", "grid")),
     "solar_to_battery": _SBG, "grid_to_battery": _SBG,
-    "solar_to_inverter": _SBGH, "battery_to_inverter": _SBGH,
-    "grid_to_inverter": _SBGH,
-    "solar_to_house": _ALLA, "battery_to_house": _ALLA, "grid_to_house": _ALLA,
+    "solar_to_inverter": _SBGHE, "battery_to_inverter": _SBGHE,
+    "grid_to_inverter": _SBGHE,
+    "solar_to_house": _ALLF, "battery_to_house": _ALLF, "grid_to_house": _ALLF,
     "solar_to_fridge": _ALLF, "battery_to_fridge": _ALLF, "grid_to_fridge": _ALLF,
     "solar_to_tesla": _ALL, "battery_to_tesla": _ALL, "grid_to_tesla": _ALL,
-    "solar_to_aircon": _ALLA, "battery_to_aircon": _ALLA,
-    "grid_to_aircon": _ALLA,
-    # node_totals() keys
-    "house": _ALLA, "tesla": _ALL, "aircon": _ALLA, "fridge": _ALLF,
+    "solar_to_aircon": _SBGE, "battery_to_aircon": _SBGE,
+    "grid_to_aircon": _SBGE,
+    "house": _ALLF, "tesla": _ALL, "aircon": _SBGE, "fridge": _ALLF,
     "battery_in": _SBG,
     "export": frozenset(("solar", "grid")),
-    "inverter": _SBGH,
-    "solar_spent": _SBGH, "battery_spent": _SBGH, "grid_spent": _SBGH,
+    "inverter": _SBGHE,
+    "solar_spent": _SBGHE, "battery_spent": _SBGHE, "grid_spent": _SBGHE,
 }
 
 
@@ -336,7 +322,7 @@ def _reading(name, value):
     return v
 
 
-def readings(solar, battery, grid, house, tesla, aircon, fridge=0.0):
+def readings(solar, battery, grid, house, tesla, eps, fridge=0.0):
     """Seven raw inputs -> the ten non-negative quantities the law works in.
 
     Split out and public because every test of the clamps wants to see these
@@ -356,13 +342,13 @@ def readings(solar, battery, grid, house, tesla, aircon, fridge=0.0):
     grid = _reading("grid", grid)
     house = _reading("house", house)
     tesla = _reading("tesla", tesla)
-    aircon = _reading("aircon", aircon)
+    eps = _reading("eps", eps)
     fridge = _reading("fridge", fridge)
 
     house = max(0.0, house)
     t = min(max(0.0, tesla), house)
     f = min(max(0.0, fridge), house - t)
-    a = min(max(0.0, aircon), house - t - f)
+    a = max(0.0, eps)
     return {
         "solar": max(0.0, solar),          # S
         "discharge": max(0.0, -battery),   # B, DC delivered
@@ -371,9 +357,9 @@ def readings(solar, battery, grid, house, tesla, aircon, fridge=0.0):
         "exp": max(0.0, -grid),            # E, AC exported
         "house": house,
         "tesla": t,                        # T, clamped to house
-        "aircon": a,                       # A, clamped to what T and F left
+        "aircon": a,                       # A, separate EPS output
         "fridge": f,                      # F, clamped to what T left
-        "house_rest": house - t - f - a,       # Hr, >= 0 by all three clamps above
+        "house_rest": house - t - f,       # Hr, >= 0 by Tesla and fridge clamps
     }
 
 
@@ -602,14 +588,14 @@ def check_structure(out, r):
         raise StructureError("a charging battery cannot also be a source")
 
 
-def decompose(solar, battery, grid, house, tesla, aircon, fridge=0.0):
+def decompose(solar, battery, grid, house, tesla, eps, fridge=0.0):
     """Instantaneous W -> {flow: W}. Eighteen keys, every value >= 0.
 
-    ``house`` includes the Tesla, fridge and air con. They are split back out
-    in that order. All are AC.
+    ``house`` includes Tesla and fridge, split out in that order. EPS is a
+    separate AC output feeding the Air con node. All are AC.
     ``solar`` and ``battery`` are DC.
     """
-    r = readings(solar, battery, grid, house, tesla, aircon, fridge)
+    r = readings(solar, battery, grid, house, tesla, eps, fridge)
 
     # Step 1: export is structurally solar-only, and capped by the solar
     # reading. Uncapped, a sample where export momentarily out-reads solar would

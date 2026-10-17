@@ -48,20 +48,20 @@ AVAILABILITY = """\
                         'sensor.solis_inverter_battery_power',
                         'sensor.solis_inverter_grid_power',
                         'sensor.solis_inverter_house_load',
+                        'sensor.solis_inverter_backup_load',
                         'sensor.tesla_home_charging_power' ]
                       | map('states') | select('is_number') | map('float')
                       | map('abs') | list %}
-          {{ vs | count == 5 and (vs | max) <= 100000 }}"""
+          {{ vs | count == 6 and (vs | max) <= 100000 }}"""
 
-# Air con and fridge are read with `| float(0)` and are NOT in the availability list; the
-# header explains why at length. The other five readings carry no default on purpose.
+# Only fridge is optional; the six guarded readings carry no default.
 PREAMBLE = """\
           {% set S  = [ 0, states('sensor.solis_inverter_solar_power')   | float ] | max %}
           {% set BP =      states('sensor.solis_inverter_battery_power') | float %}
           {% set GP =      states('sensor.solis_inverter_grid_power')    | float %}
           {% set H  = [ 0, states('sensor.solis_inverter_house_load')    | float ] | max %}
           {% set TR = [ 0, states('sensor.tesla_home_charging_power')    | float ] | max %}
-          {% set AR = [ 0, states('sensor.aircon_power')              | float(0) ] | max %}
+          {% set A  = [ 0, states('sensor.solis_inverter_backup_load') | float ] | max %}
           {% set FR = [ 0, states('sensor.fridge_power')              | float(0) ] | max %}
           {% set B  = [ 0, -BP ] | max %}
           {% set C  = [ 0,  BP ] | max %}
@@ -69,8 +69,7 @@ PREAMBLE = """\
           {% set E  = [ 0, -GP ] | max %}
           {% set T  = [ TR, H ] | min %}
           {% set F  = [ FR, H - T ] | min %}
-          {% set A  = [ AR, H - T - F ] | min %}
-          {% set Hr = [ 0, H - T - F - A ] | max %}
+          {% set Hr = H - T - F %}
           {% set L  = [ 0, (S + B + G) - (Hr + T + A + F + C + E) ] | max %}
           {% set s2e = [ S, E ] | min %}
           {% set S1 = S - s2e %}

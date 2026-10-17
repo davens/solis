@@ -137,14 +137,6 @@ def states_for(counters, flows):
 #       looks complete and proves nothing.
 # --------------------------------------------------------------------------
 
-# (hours, solar W, battery W (+charging), house W incl. car AND air con,
-#  tesla W, aircon W)
-#
-# The air-con column was added with the node on 2026-09-11, and it is non-zero
-# on four of the eight samples for the reason stated just above about the
-# Inverter node: three links exercised only at zero are the kind of coverage
-# that looks complete and proves nothing. It never exceeds `house - tesla`, so
-# the A <= house - T clamp does not bite here; flows.py owns that clamp.
 BALANCED_PROFILE = (
     (5.0, 0.0, 2500.0, 700.0, 0.0, 0.0, 80.0),        # 23:30-05:30 timed grid charge
     (1.0, 0.0, 0.0, 650.0, 0.0, 0.0, 80.0),           # pre-dawn
@@ -171,15 +163,15 @@ def simulate(profile, parasitic=0.0):
     """
     counters = {node: 0.0 for node in COUNTER_NODES}
     flows = {key: 0.0 for key in FLOWS}
-    for hours, solar, battery, house, tesla, aircon, fridge in profile:
-        grid = house + battery - solar + parasitic
+    for hours, solar, battery, house, tesla, eps, fridge in profile:
+        grid = house + eps + battery - solar + parasitic
         counters[SOLAR] += solar * hours / 1000.0
         counters[BAT_IN] += max(0.0, battery) * hours / 1000.0
         counters[BAT_OUT] += max(0.0, -battery) * hours / 1000.0
         counters[GRID_IN] += max(0.0, grid) * hours / 1000.0
         counters[EXPORT] += max(0.0, -grid) * hours / 1000.0
         for key, watts in decompose(solar, battery, grid, house, tesla,
-                                    aircon, fridge).items():
+                                    eps, fridge).items():
             flows[key] += watts * hours / 1000.0
     return counters, flows
 
@@ -210,11 +202,6 @@ def test_fridge_ribbons_are_drawn_from_all_three_sources(states, totals):
 # ==========================================================================
 
 def test_the_layout_is_eighteen_links_and_nothing_else():
-    """BRIEF_V2.md section 1 says 16. It was 15, then 14 when "Stored" went on
-    2026-08-30, then 12 when the device split went the same day, and is 15
-    again since air con returned as a first-class sink on 2026-09-11 -- one new
-    link per source. Every link is still a measured source->sink flow; the
-    brief's 16 was an off-by-one in section 1 and is unrelated."""
     assert len(layout.SOURCE_SINK_LINKS) == 18
     assert len(layout.LINKS) == 18
     assert len(layout.FLOW_METERS) == 18
@@ -321,9 +308,6 @@ def test_each_node_sits_in_its_intended_section(node_id, section):
 
 
 def test_two_sections_exactly_as_designed():
-    """Both second-hop nodes went on 2026-08-30 -- "Stored", then House's
-    Air con / Rest of house split. Dropping the split is what makes every sink
-    a terminus, so all five sit at the same x as each other."""
     assert sorted({n["section"] for n in layout.NODES}) == [0, 1]
     assert len(layout.SECTIONS) == 2
     for node in layout.NODES:
@@ -450,8 +434,8 @@ def test_the_lossy_day_still_closes_on_every_sink_and_source():
 
 def test_the_energy_balance_of_the_simulated_day_closes():
     supply = SIM_COUNTERS[SOLAR] + SIM_COUNTERS[GRID_IN] + SIM_COUNTERS[BAT_OUT]
-    sink = SIM_COUNTERS[EXPORT] + SIM_COUNTERS[BAT_IN] + SIM_NODE_TOTALS["house"] \
-        + SIM_NODE_TOTALS["tesla"] + SIM_NODE_TOTALS["aircon"] + SIM_NODE_TOTALS["fridge"] \
+    sink = SIM_COUNTERS[EXPORT] + SIM_COUNTERS[BAT_IN] + SIM_NODE_TOTALS["house"]\
+        + SIM_NODE_TOTALS["tesla"] + SIM_NODE_TOTALS["aircon"] + SIM_NODE_TOTALS["fridge"]\
         + SIM_NODE_TOTALS["inverter"]
     assert supply == pytest.approx(sink, abs=1e-9)
 
@@ -484,10 +468,10 @@ def test_all_decomposed_flows_are_non_negative():
 
 def test_instantaneous_decomposition_matches_the_hourly_integration():
     total = 0.0
-    for hours, solar, battery, house, tesla, aircon, fridge in BALANCED_PROFILE:
-        grid = house + battery - solar
+    for hours, solar, battery, house, tesla, eps, fridge in BALANCED_PROFILE:
+        grid = house + eps + battery - solar
         total += sum(decompose(solar, battery, grid, house, tesla,
-                               aircon, fridge).values()) * hours / 1000.0
+                               eps, fridge).values()) * hours / 1000.0
     assert total == pytest.approx(sum(SIM_FLOWS.values()), abs=1e-9)
 
 
@@ -644,10 +628,10 @@ def test_negative_flow_value_DOES_produce_a_negative_ribbon():
 
 
 def test_decompose_never_emits_a_negative_flow_so_the_hazard_stays_theoretical():
-    for hours, solar, battery, house, tesla, aircon, fridge in BALANCED_PROFILE:
-        grid = house + battery - solar
+    for hours, solar, battery, house, tesla, eps, fridge in BALANCED_PROFILE:
+        grid = house + eps + battery - solar
         assert all(v >= 0.0 for v in
-                   decompose(solar, battery, grid, house, tesla, aircon, fridge).values())
+                   decompose(solar, battery, grid, house, tesla, eps, fridge).values())
 
 
 # ==========================================================================
@@ -691,14 +675,6 @@ def test_flow_meters_never_appear_as_node_totals():
     assert not (drawn & set(layout.FLOW_METERS))
 
 
-# ==========================================================================
-# 7. The sinks
-#
-# House's Air con / Rest of house split lived here until 2026-08-30. It went
-# with the third column, so the only claims left are about the sinks
-# themselves. The car is no longer hidden inside House either way: it has been
-# a peer of House since v2, and House now reads house-only.
-# ==========================================================================
 
 def test_house_reads_house_only_and_excludes_the_car_and_the_air_con():
     got = resolve(SIM_STATES)
@@ -706,16 +682,14 @@ def test_house_reads_house_only_and_excludes_the_car_and_the_air_con():
     assert SIM_NODE_TOTALS["aircon"] > 0.0
     house = sum(got[(source, HOUSE)] for source in (SOLAR, BAT_OUT, GRID_IN))
     assert house == pytest.approx(SIM_NODE_TOTALS["house"], abs=1e-6)
-    v1_style = (SIM_NODE_TOTALS["house"] + SIM_NODE_TOTALS["tesla"]
-                + SIM_NODE_TOTALS["aircon"] + SIM_NODE_TOTALS["fridge"])
-    assert house == pytest.approx(
-        v1_style - SIM_NODE_TOTALS["tesla"] - SIM_NODE_TOTALS["aircon"] - SIM_NODE_TOTALS["fridge"],
-        abs=1e-6)
-    # The whole metered house load is the three of them and nothing else, so
-    # nothing is double-counted and nothing has fallen between them.
-    metered = sum(hours * house_w / 1000.0
+    combined_house = (SIM_NODE_TOTALS["house"] + SIM_NODE_TOTALS["tesla"]
+                      + SIM_NODE_TOTALS["fridge"])
+    metered = sum(hours * house_w / 1000
                   for hours, _s, _b, house_w, _t, _a, _f in BALANCED_PROFILE)
-    assert v1_style == pytest.approx(metered, abs=1e-6)
+    assert combined_house == pytest.approx(metered, abs=1e-6)
+    eps_metered = sum(hours * a / 1000
+                      for hours, _s, _b, _h, _t, a, _f in BALANCED_PROFILE)
+    assert SIM_NODE_TOTALS["aircon"] == pytest.approx(eps_metered, abs=1e-6)
 
 
 def test_the_aircon_node_exists_is_a_section_1_terminus_and_is_hot_pink():
@@ -738,8 +712,6 @@ def test_the_aircon_node_exists_is_a_section_1_terminus_and_is_hot_pink():
     assert len(inbound) == 3
     assert {l["source"] for l in inbound} == {SOLAR, BAT_OUT, GRID_IN}
     assert [l for l in layout.LINKS if l["source"] == AIRCON] == []
-    # Not a child of House, and House is not a child of it: either shape would
-    # double-count the air con and would need a two-section span to draw.
     assert not any({l["source"], l["target"]} == {HOUSE, AIRCON}
                    for l in layout.LINKS)
     assert layout.check_spans() == []

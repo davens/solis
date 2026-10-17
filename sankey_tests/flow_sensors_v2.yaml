@@ -62,10 +62,10 @@
 #   sensor.solis_inverter_solar_power     W, DC, >= 0
 #   sensor.solis_inverter_battery_power   W, DC, POSITIVE = CHARGING
 #   sensor.solis_inverter_grid_power      W, AC, POSITIVE = IMPORTING
-#   sensor.solis_inverter_house_load      W, AC, >= 0, INCLUDES Tesla, air con AND fridge
+#   sensor.solis_inverter_house_load      W, AC, includes Tesla and fridge, excludes EPS
+#   sensor.solis_inverter_backup_load     W, AC, separate EPS output (33148), ~10 s
 #   sensor.tesla_home_charging_power      W, AC, >= 0
-#   sensor.fridge_power                   W, AC, >= 0, direct ZHA measurement (~10 s)
-#   sensor.aircon_power                   W, AC, >= 0, hourly -- see below
+#   sensor.fridge_power                   W, AC, >= 0, direct ZHA measurement
 #
 # Entity names use v2-layout's vocabulary, which names a sink after its NODE:
 # `grid` as a sink is EXPORT, `battery` as a sink is CHARGE. So flows.py's
@@ -79,14 +79,12 @@
 #   G  = max(0, grid)               E = max(0, -grid)
 #   T  = min(max(0, tesla), H)
 #   F  = min(max(0, fridge), H - T)
-#   A  = min(max(0, aircon), H - T - F)
-#   Hr = max(0, H - T - F - A)
+#   A  = max(0, eps)
+#   Hr = H - T - F
 #   L  = max(0, (S + B + G) - (Hr + T + A + F + C + E))      <- the Inverter node
 #
-# Best-measured first: Tesla, then the direct 10 s fridge plug, then the held
-# hourly air-con average. Air-con overshoot can consume only House rest.
-# Fridge reads T but ignores air con; Air con reads T and F. Tesla ribbons
-# stay unchanged, and Hr + T + F + A == H keeps Inverter unchanged.
+# House contains Tesla and fridge only; EPS is additional AC load (H + A).
+# Keep *_to_aircon keys and helper ids for statistics continuity.
 #
 #   step 1  export is structurally solar-only:  s2e = min(S, E);  S1 = S - s2e
 #   step 2  every remaining sink draws the same source mix:
@@ -100,75 +98,15 @@
 # cannot charge and discharge in the same sample, so B > 0 implies C == 0.
 #
 # ------------------------------------------------------------- unavailability
-# The POWER sensors require ALL FIVE sources to be real numbers within
-# +/-100 kW. `| float` carries NO default, so a non-number raises and the
-# sensor renders `unavailable` rather than banking a silent 0 W -- the
-# `| float(0)` trap, where a dropout is banked as real zero energy.
+# Updated 2026-10-17: six guarded inputs, including EPS, require real numbers
+# within +/-100 kW and use float without a default. EPS and House are read in
+# the same Modbus block. Only fridge uses float(0): a missing reading leaves
+# it inside House. The strict Python reference rejects bad fridge readings;
+# live Jinja fallback/clamping is tested separately.
 #
-# Twelve of eighteen flows mathematically depend on Tesla: House, Tesla, Air con
-# and Fridge each read T. The shared five-entity guard still blanks all eighteen
-# power templates when TeslaMate goes away. Measured: the
-# Tesla power sensor never went non-numeric on any fixture day -- a sleeping
-# car reads a genuine 0 W, because the template gates on current > 0 -- so the
-# 73%-offline figure in CLAUDE.md does NOT translate into blanking.
-#
-# ------------------------------------------------- the air-con channel is NOT
-# `sensor.aircon_power` is, alongside sensor.fridge_power, a reading taken with `| float(0)`, and it is
-# deliberately ABSENT from the availability guard, which still counts exactly
-# five entities. Both choices are the opposite of the rule above and both are
-# load-bearing:
-#
-#   * It is now a trigger-based template in /config/packages/aircon_power.yaml
-#     (repo copy: ha_packages/aircon_power.yaml). Changed energy_today steps
-#     become interval-average power held until the next step; close changes
-#     are merged, drops are daily resets (~00:14 local), and no step for 75
-#     minutes reads 0. It reads 0 until its first baseline after creation and
-#     restores across restarts. The former derivative's two-hour unknown
-#     restart window no longer applies; the optional fallback remains useful.
-#   * A missing air-con reading defaults to A = 0, which puts the air con back
-#     inside Hr -- exactly the behaviour this file had before the air-con node
-#     existed. The house total stays right and nothing is fabricated; only the
-#     Air con / House split is lost. That is the correct failure, and it is why
-#     the `| float(0)` trap does not apply here: zero is not a silent guess, it
-#     is the well-defined fallback of "we cannot separate it".
-#
-# Be precise about what that default does and does not cover. `| float(0)`
-# falls back only on text Jinja cannot parse -- a missing entity, 'unknown',
-# 'unavailable'. 'inf' and '1e9' PARSE, so AR becomes a real enormous number
-# and it is the `[ AR, H - T - F ] | min` clamp, not the default, that contains
-# them: the whole house remainder is then attributed to the air con and Hr
-# goes to 0. Nothing is fabricated and no other ribbon moves -- the damage is
-# confined to the House / Air con split -- but it is a clamp, not a fallback.
-# test_jinja_parity.py splits these two cases deliberately
-# (AIRCON_FALLS_BACK_TO_ZERO vs AIRCON_CLAMPED_NOT_ZERO) and pins both.
-#
-# These optional channels are where flows.py and the Jinja deliberately disagree:
-# flows.py's _reading("aircon", ...) RAISES BadReading on a non-number, NaN,
-# inf, or a value over MAX_PLAUSIBLE_W, because it is the reference model and
-# has no live-availability duty. The Jinja cannot raise without blanking all
-# eighteen flows, which is the whole point of leaving the channel out of the
-# guard. The divergence is pinned by a test, not endorsed.
-#
-# The channel is HOURLY. The LG counter steps once an hour (measured 2026-09-11:
-# median gap 3600 s, min 661 s over four days), so the template holds one
-# value for a whole hour and that value describes the interval just PAST. Every
-# air-con ribbon is therefore an hourly average lagged by up to an hour, while
-# every other ribbon is sampled at 10 s. Lag alone does not change daily
-# totals, but instantaneous House clamping can limit the carve-out. The source
-# split within a day is only as sharp as an hour.
-#
-# Values are rounded to 4 dp of a watt: worst-case error 5e-5 W, inside the
-# 1e-4 W parity gate.
-
-
-# ---------------------------------------------------------- the fridge channel
-# Added 2026-10-11. Fridge is measured directly by a ZHA smart plug at roughly
-# 10 s cadence, with state_class measurement. No derivative is involved.
-# Read it like air con: float(0), clamped >= 0, absent from the five-entity
-# availability guard. Missing means F = 0 and leaves the fridge inside House.
-# Carve Tesla first, Fridge second, Air con third; Hr + T + F + A == H.
-# The strict Python reference rejects bad optional readings, just as it does
-# for air con; live Jinja fallback/clamping is tested separately.
+# Owner identifies EPS as air con plus a small charger. Its measured draw is
+# outside House; no House cap or hourly-derived input applies to Air con.
+# Values are rounded to 4 dp W, worst-case error 5e-5 W.
 template:
   - sensor:
       # ------- solar_to_grid  (flows.py key: solar_to_export) -------
@@ -182,17 +120,18 @@ template:
                         'sensor.solis_inverter_battery_power',
                         'sensor.solis_inverter_grid_power',
                         'sensor.solis_inverter_house_load',
+                        'sensor.solis_inverter_backup_load',
                         'sensor.tesla_home_charging_power' ]
                       | map('states') | select('is_number') | map('float')
                       | map('abs') | list %}
-          {{ vs | count == 5 and (vs | max) <= 100000 }}
+          {{ vs | count == 6 and (vs | max) <= 100000 }}
         state: >
           {% set S  = [ 0, states('sensor.solis_inverter_solar_power')   | float ] | max %}
           {% set BP =      states('sensor.solis_inverter_battery_power') | float %}
           {% set GP =      states('sensor.solis_inverter_grid_power')    | float %}
           {% set H  = [ 0, states('sensor.solis_inverter_house_load')    | float ] | max %}
           {% set TR = [ 0, states('sensor.tesla_home_charging_power')    | float ] | max %}
-          {% set AR = [ 0, states('sensor.aircon_power')              | float(0) ] | max %}
+          {% set A  = [ 0, states('sensor.solis_inverter_backup_load') | float ] | max %}
           {% set FR = [ 0, states('sensor.fridge_power')              | float(0) ] | max %}
           {% set B  = [ 0, -BP ] | max %}
           {% set C  = [ 0,  BP ] | max %}
@@ -200,8 +139,7 @@ template:
           {% set E  = [ 0, -GP ] | max %}
           {% set T  = [ TR, H ] | min %}
           {% set F  = [ FR, H - T ] | min %}
-          {% set A  = [ AR, H - T - F ] | min %}
-          {% set Hr = [ 0, H - T - F - A ] | max %}
+          {% set Hr = H - T - F %}
           {% set L  = [ 0, (S + B + G) - (Hr + T + A + F + C + E) ] | max %}
           {% set s2e = [ S, E ] | min %}
           {% set S1 = S - s2e %}
@@ -224,7 +162,7 @@ template:
           {% set GP =      states('sensor.solis_inverter_grid_power')    | float %}
           {% set H  = [ 0, states('sensor.solis_inverter_house_load')    | float ] | max %}
           {% set TR = [ 0, states('sensor.tesla_home_charging_power')    | float ] | max %}
-          {% set AR = [ 0, states('sensor.aircon_power')              | float(0) ] | max %}
+          {% set A  = [ 0, states('sensor.solis_inverter_backup_load') | float ] | max %}
           {% set FR = [ 0, states('sensor.fridge_power')              | float(0) ] | max %}
           {% set B  = [ 0, -BP ] | max %}
           {% set C  = [ 0,  BP ] | max %}
@@ -232,8 +170,7 @@ template:
           {% set E  = [ 0, -GP ] | max %}
           {% set T  = [ TR, H ] | min %}
           {% set F  = [ FR, H - T ] | min %}
-          {% set A  = [ AR, H - T - F ] | min %}
-          {% set Hr = [ 0, H - T - F - A ] | max %}
+          {% set Hr = H - T - F %}
           {% set L  = [ 0, (S + B + G) - (Hr + T + A + F + C + E) ] | max %}
           {% set s2e = [ S, E ] | min %}
           {% set S1 = S - s2e %}
@@ -256,7 +193,7 @@ template:
           {% set GP =      states('sensor.solis_inverter_grid_power')    | float %}
           {% set H  = [ 0, states('sensor.solis_inverter_house_load')    | float ] | max %}
           {% set TR = [ 0, states('sensor.tesla_home_charging_power')    | float ] | max %}
-          {% set AR = [ 0, states('sensor.aircon_power')              | float(0) ] | max %}
+          {% set A  = [ 0, states('sensor.solis_inverter_backup_load') | float ] | max %}
           {% set FR = [ 0, states('sensor.fridge_power')              | float(0) ] | max %}
           {% set B  = [ 0, -BP ] | max %}
           {% set C  = [ 0,  BP ] | max %}
@@ -264,8 +201,7 @@ template:
           {% set E  = [ 0, -GP ] | max %}
           {% set T  = [ TR, H ] | min %}
           {% set F  = [ FR, H - T ] | min %}
-          {% set A  = [ AR, H - T - F ] | min %}
-          {% set Hr = [ 0, H - T - F - A ] | max %}
+          {% set Hr = H - T - F %}
           {% set L  = [ 0, (S + B + G) - (Hr + T + A + F + C + E) ] | max %}
           {% set s2e = [ S, E ] | min %}
           {% set S1 = S - s2e %}
@@ -288,7 +224,7 @@ template:
           {% set GP =      states('sensor.solis_inverter_grid_power')    | float %}
           {% set H  = [ 0, states('sensor.solis_inverter_house_load')    | float ] | max %}
           {% set TR = [ 0, states('sensor.tesla_home_charging_power')    | float ] | max %}
-          {% set AR = [ 0, states('sensor.aircon_power')              | float(0) ] | max %}
+          {% set A  = [ 0, states('sensor.solis_inverter_backup_load') | float ] | max %}
           {% set FR = [ 0, states('sensor.fridge_power')              | float(0) ] | max %}
           {% set B  = [ 0, -BP ] | max %}
           {% set C  = [ 0,  BP ] | max %}
@@ -296,8 +232,7 @@ template:
           {% set E  = [ 0, -GP ] | max %}
           {% set T  = [ TR, H ] | min %}
           {% set F  = [ FR, H - T ] | min %}
-          {% set A  = [ AR, H - T - F ] | min %}
-          {% set Hr = [ 0, H - T - F - A ] | max %}
+          {% set Hr = H - T - F %}
           {% set L  = [ 0, (S + B + G) - (Hr + T + A + F + C + E) ] | max %}
           {% set s2e = [ S, E ] | min %}
           {% set S1 = S - s2e %}
@@ -320,7 +255,7 @@ template:
           {% set GP =      states('sensor.solis_inverter_grid_power')    | float %}
           {% set H  = [ 0, states('sensor.solis_inverter_house_load')    | float ] | max %}
           {% set TR = [ 0, states('sensor.tesla_home_charging_power')    | float ] | max %}
-          {% set AR = [ 0, states('sensor.aircon_power')              | float(0) ] | max %}
+          {% set A  = [ 0, states('sensor.solis_inverter_backup_load') | float ] | max %}
           {% set FR = [ 0, states('sensor.fridge_power')              | float(0) ] | max %}
           {% set B  = [ 0, -BP ] | max %}
           {% set C  = [ 0,  BP ] | max %}
@@ -328,8 +263,7 @@ template:
           {% set E  = [ 0, -GP ] | max %}
           {% set T  = [ TR, H ] | min %}
           {% set F  = [ FR, H - T ] | min %}
-          {% set A  = [ AR, H - T - F ] | min %}
-          {% set Hr = [ 0, H - T - F - A ] | max %}
+          {% set Hr = H - T - F %}
           {% set L  = [ 0, (S + B + G) - (Hr + T + A + F + C + E) ] | max %}
           {% set s2e = [ S, E ] | min %}
           {% set S1 = S - s2e %}
@@ -352,7 +286,7 @@ template:
           {% set GP =      states('sensor.solis_inverter_grid_power')    | float %}
           {% set H  = [ 0, states('sensor.solis_inverter_house_load')    | float ] | max %}
           {% set TR = [ 0, states('sensor.tesla_home_charging_power')    | float ] | max %}
-          {% set AR = [ 0, states('sensor.aircon_power')              | float(0) ] | max %}
+          {% set A  = [ 0, states('sensor.solis_inverter_backup_load') | float ] | max %}
           {% set FR = [ 0, states('sensor.fridge_power')              | float(0) ] | max %}
           {% set B  = [ 0, -BP ] | max %}
           {% set C  = [ 0,  BP ] | max %}
@@ -360,8 +294,7 @@ template:
           {% set E  = [ 0, -GP ] | max %}
           {% set T  = [ TR, H ] | min %}
           {% set F  = [ FR, H - T ] | min %}
-          {% set A  = [ AR, H - T - F ] | min %}
-          {% set Hr = [ 0, H - T - F - A ] | max %}
+          {% set Hr = H - T - F %}
           {% set L  = [ 0, (S + B + G) - (Hr + T + A + F + C + E) ] | max %}
           {% set s2e = [ S, E ] | min %}
           {% set S1 = S - s2e %}
@@ -384,7 +317,7 @@ template:
           {% set GP =      states('sensor.solis_inverter_grid_power')    | float %}
           {% set H  = [ 0, states('sensor.solis_inverter_house_load')    | float ] | max %}
           {% set TR = [ 0, states('sensor.tesla_home_charging_power')    | float ] | max %}
-          {% set AR = [ 0, states('sensor.aircon_power')              | float(0) ] | max %}
+          {% set A  = [ 0, states('sensor.solis_inverter_backup_load') | float ] | max %}
           {% set FR = [ 0, states('sensor.fridge_power')              | float(0) ] | max %}
           {% set B  = [ 0, -BP ] | max %}
           {% set C  = [ 0,  BP ] | max %}
@@ -392,8 +325,7 @@ template:
           {% set E  = [ 0, -GP ] | max %}
           {% set T  = [ TR, H ] | min %}
           {% set F  = [ FR, H - T ] | min %}
-          {% set A  = [ AR, H - T - F ] | min %}
-          {% set Hr = [ 0, H - T - F - A ] | max %}
+          {% set Hr = H - T - F %}
           {% set L  = [ 0, (S + B + G) - (Hr + T + A + F + C + E) ] | max %}
           {% set s2e = [ S, E ] | min %}
           {% set S1 = S - s2e %}
@@ -416,7 +348,7 @@ template:
           {% set GP =      states('sensor.solis_inverter_grid_power')    | float %}
           {% set H  = [ 0, states('sensor.solis_inverter_house_load')    | float ] | max %}
           {% set TR = [ 0, states('sensor.tesla_home_charging_power')    | float ] | max %}
-          {% set AR = [ 0, states('sensor.aircon_power')              | float(0) ] | max %}
+          {% set A  = [ 0, states('sensor.solis_inverter_backup_load') | float ] | max %}
           {% set FR = [ 0, states('sensor.fridge_power')              | float(0) ] | max %}
           {% set B  = [ 0, -BP ] | max %}
           {% set C  = [ 0,  BP ] | max %}
@@ -424,8 +356,7 @@ template:
           {% set E  = [ 0, -GP ] | max %}
           {% set T  = [ TR, H ] | min %}
           {% set F  = [ FR, H - T ] | min %}
-          {% set A  = [ AR, H - T - F ] | min %}
-          {% set Hr = [ 0, H - T - F - A ] | max %}
+          {% set Hr = H - T - F %}
           {% set L  = [ 0, (S + B + G) - (Hr + T + A + F + C + E) ] | max %}
           {% set s2e = [ S, E ] | min %}
           {% set S1 = S - s2e %}
@@ -448,7 +379,7 @@ template:
           {% set GP =      states('sensor.solis_inverter_grid_power')    | float %}
           {% set H  = [ 0, states('sensor.solis_inverter_house_load')    | float ] | max %}
           {% set TR = [ 0, states('sensor.tesla_home_charging_power')    | float ] | max %}
-          {% set AR = [ 0, states('sensor.aircon_power')              | float(0) ] | max %}
+          {% set A  = [ 0, states('sensor.solis_inverter_backup_load') | float ] | max %}
           {% set FR = [ 0, states('sensor.fridge_power')              | float(0) ] | max %}
           {% set B  = [ 0, -BP ] | max %}
           {% set C  = [ 0,  BP ] | max %}
@@ -456,8 +387,7 @@ template:
           {% set E  = [ 0, -GP ] | max %}
           {% set T  = [ TR, H ] | min %}
           {% set F  = [ FR, H - T ] | min %}
-          {% set A  = [ AR, H - T - F ] | min %}
-          {% set Hr = [ 0, H - T - F - A ] | max %}
+          {% set Hr = H - T - F %}
           {% set L  = [ 0, (S + B + G) - (Hr + T + A + F + C + E) ] | max %}
           {% set s2e = [ S, E ] | min %}
           {% set S1 = S - s2e %}
@@ -480,7 +410,7 @@ template:
           {% set GP =      states('sensor.solis_inverter_grid_power')    | float %}
           {% set H  = [ 0, states('sensor.solis_inverter_house_load')    | float ] | max %}
           {% set TR = [ 0, states('sensor.tesla_home_charging_power')    | float ] | max %}
-          {% set AR = [ 0, states('sensor.aircon_power')              | float(0) ] | max %}
+          {% set A  = [ 0, states('sensor.solis_inverter_backup_load') | float ] | max %}
           {% set FR = [ 0, states('sensor.fridge_power')              | float(0) ] | max %}
           {% set B  = [ 0, -BP ] | max %}
           {% set C  = [ 0,  BP ] | max %}
@@ -488,8 +418,7 @@ template:
           {% set E  = [ 0, -GP ] | max %}
           {% set T  = [ TR, H ] | min %}
           {% set F  = [ FR, H - T ] | min %}
-          {% set A  = [ AR, H - T - F ] | min %}
-          {% set Hr = [ 0, H - T - F - A ] | max %}
+          {% set Hr = H - T - F %}
           {% set L  = [ 0, (S + B + G) - (Hr + T + A + F + C + E) ] | max %}
           {% set s2e = [ S, E ] | min %}
           {% set S1 = S - s2e %}
@@ -512,7 +441,7 @@ template:
           {% set GP =      states('sensor.solis_inverter_grid_power')    | float %}
           {% set H  = [ 0, states('sensor.solis_inverter_house_load')    | float ] | max %}
           {% set TR = [ 0, states('sensor.tesla_home_charging_power')    | float ] | max %}
-          {% set AR = [ 0, states('sensor.aircon_power')              | float(0) ] | max %}
+          {% set A  = [ 0, states('sensor.solis_inverter_backup_load') | float ] | max %}
           {% set FR = [ 0, states('sensor.fridge_power')              | float(0) ] | max %}
           {% set B  = [ 0, -BP ] | max %}
           {% set C  = [ 0,  BP ] | max %}
@@ -520,8 +449,7 @@ template:
           {% set E  = [ 0, -GP ] | max %}
           {% set T  = [ TR, H ] | min %}
           {% set F  = [ FR, H - T ] | min %}
-          {% set A  = [ AR, H - T - F ] | min %}
-          {% set Hr = [ 0, H - T - F - A ] | max %}
+          {% set Hr = H - T - F %}
           {% set L  = [ 0, (S + B + G) - (Hr + T + A + F + C + E) ] | max %}
           {% set s2e = [ S, E ] | min %}
           {% set S1 = S - s2e %}
@@ -544,7 +472,7 @@ template:
           {% set GP =      states('sensor.solis_inverter_grid_power')    | float %}
           {% set H  = [ 0, states('sensor.solis_inverter_house_load')    | float ] | max %}
           {% set TR = [ 0, states('sensor.tesla_home_charging_power')    | float ] | max %}
-          {% set AR = [ 0, states('sensor.aircon_power')              | float(0) ] | max %}
+          {% set A  = [ 0, states('sensor.solis_inverter_backup_load') | float ] | max %}
           {% set FR = [ 0, states('sensor.fridge_power')              | float(0) ] | max %}
           {% set B  = [ 0, -BP ] | max %}
           {% set C  = [ 0,  BP ] | max %}
@@ -552,8 +480,7 @@ template:
           {% set E  = [ 0, -GP ] | max %}
           {% set T  = [ TR, H ] | min %}
           {% set F  = [ FR, H - T ] | min %}
-          {% set A  = [ AR, H - T - F ] | min %}
-          {% set Hr = [ 0, H - T - F - A ] | max %}
+          {% set Hr = H - T - F %}
           {% set L  = [ 0, (S + B + G) - (Hr + T + A + F + C + E) ] | max %}
           {% set s2e = [ S, E ] | min %}
           {% set S1 = S - s2e %}
@@ -576,7 +503,7 @@ template:
           {% set GP =      states('sensor.solis_inverter_grid_power')    | float %}
           {% set H  = [ 0, states('sensor.solis_inverter_house_load')    | float ] | max %}
           {% set TR = [ 0, states('sensor.tesla_home_charging_power')    | float ] | max %}
-          {% set AR = [ 0, states('sensor.aircon_power')              | float(0) ] | max %}
+          {% set A  = [ 0, states('sensor.solis_inverter_backup_load') | float ] | max %}
           {% set FR = [ 0, states('sensor.fridge_power')              | float(0) ] | max %}
           {% set B  = [ 0, -BP ] | max %}
           {% set C  = [ 0,  BP ] | max %}
@@ -584,8 +511,7 @@ template:
           {% set E  = [ 0, -GP ] | max %}
           {% set T  = [ TR, H ] | min %}
           {% set F  = [ FR, H - T ] | min %}
-          {% set A  = [ AR, H - T - F ] | min %}
-          {% set Hr = [ 0, H - T - F - A ] | max %}
+          {% set Hr = H - T - F %}
           {% set L  = [ 0, (S + B + G) - (Hr + T + A + F + C + E) ] | max %}
           {% set s2e = [ S, E ] | min %}
           {% set S1 = S - s2e %}
@@ -608,7 +534,7 @@ template:
           {% set GP =      states('sensor.solis_inverter_grid_power')    | float %}
           {% set H  = [ 0, states('sensor.solis_inverter_house_load')    | float ] | max %}
           {% set TR = [ 0, states('sensor.tesla_home_charging_power')    | float ] | max %}
-          {% set AR = [ 0, states('sensor.aircon_power')              | float(0) ] | max %}
+          {% set A  = [ 0, states('sensor.solis_inverter_backup_load') | float ] | max %}
           {% set FR = [ 0, states('sensor.fridge_power')              | float(0) ] | max %}
           {% set B  = [ 0, -BP ] | max %}
           {% set C  = [ 0,  BP ] | max %}
@@ -616,8 +542,7 @@ template:
           {% set E  = [ 0, -GP ] | max %}
           {% set T  = [ TR, H ] | min %}
           {% set F  = [ FR, H - T ] | min %}
-          {% set A  = [ AR, H - T - F ] | min %}
-          {% set Hr = [ 0, H - T - F - A ] | max %}
+          {% set Hr = H - T - F %}
           {% set L  = [ 0, (S + B + G) - (Hr + T + A + F + C + E) ] | max %}
           {% set s2e = [ S, E ] | min %}
           {% set S1 = S - s2e %}
@@ -640,7 +565,7 @@ template:
           {% set GP =      states('sensor.solis_inverter_grid_power')    | float %}
           {% set H  = [ 0, states('sensor.solis_inverter_house_load')    | float ] | max %}
           {% set TR = [ 0, states('sensor.tesla_home_charging_power')    | float ] | max %}
-          {% set AR = [ 0, states('sensor.aircon_power')              | float(0) ] | max %}
+          {% set A  = [ 0, states('sensor.solis_inverter_backup_load') | float ] | max %}
           {% set FR = [ 0, states('sensor.fridge_power')              | float(0) ] | max %}
           {% set B  = [ 0, -BP ] | max %}
           {% set C  = [ 0,  BP ] | max %}
@@ -648,8 +573,7 @@ template:
           {% set E  = [ 0, -GP ] | max %}
           {% set T  = [ TR, H ] | min %}
           {% set F  = [ FR, H - T ] | min %}
-          {% set A  = [ AR, H - T - F ] | min %}
-          {% set Hr = [ 0, H - T - F - A ] | max %}
+          {% set Hr = H - T - F %}
           {% set L  = [ 0, (S + B + G) - (Hr + T + A + F + C + E) ] | max %}
           {% set s2e = [ S, E ] | min %}
           {% set S1 = S - s2e %}
@@ -672,7 +596,7 @@ template:
           {% set GP =      states('sensor.solis_inverter_grid_power')    | float %}
           {% set H  = [ 0, states('sensor.solis_inverter_house_load')    | float ] | max %}
           {% set TR = [ 0, states('sensor.tesla_home_charging_power')    | float ] | max %}
-          {% set AR = [ 0, states('sensor.aircon_power')              | float(0) ] | max %}
+          {% set A  = [ 0, states('sensor.solis_inverter_backup_load') | float ] | max %}
           {% set FR = [ 0, states('sensor.fridge_power')              | float(0) ] | max %}
           {% set B  = [ 0, -BP ] | max %}
           {% set C  = [ 0,  BP ] | max %}
@@ -680,8 +604,7 @@ template:
           {% set E  = [ 0, -GP ] | max %}
           {% set T  = [ TR, H ] | min %}
           {% set F  = [ FR, H - T ] | min %}
-          {% set A  = [ AR, H - T - F ] | min %}
-          {% set Hr = [ 0, H - T - F - A ] | max %}
+          {% set Hr = H - T - F %}
           {% set L  = [ 0, (S + B + G) - (Hr + T + A + F + C + E) ] | max %}
           {% set s2e = [ S, E ] | min %}
           {% set S1 = S - s2e %}
@@ -704,7 +627,7 @@ template:
           {% set GP =      states('sensor.solis_inverter_grid_power')    | float %}
           {% set H  = [ 0, states('sensor.solis_inverter_house_load')    | float ] | max %}
           {% set TR = [ 0, states('sensor.tesla_home_charging_power')    | float ] | max %}
-          {% set AR = [ 0, states('sensor.aircon_power')              | float(0) ] | max %}
+          {% set A  = [ 0, states('sensor.solis_inverter_backup_load') | float ] | max %}
           {% set FR = [ 0, states('sensor.fridge_power')              | float(0) ] | max %}
           {% set B  = [ 0, -BP ] | max %}
           {% set C  = [ 0,  BP ] | max %}
@@ -712,8 +635,7 @@ template:
           {% set E  = [ 0, -GP ] | max %}
           {% set T  = [ TR, H ] | min %}
           {% set F  = [ FR, H - T ] | min %}
-          {% set A  = [ AR, H - T - F ] | min %}
-          {% set Hr = [ 0, H - T - F - A ] | max %}
+          {% set Hr = H - T - F %}
           {% set L  = [ 0, (S + B + G) - (Hr + T + A + F + C + E) ] | max %}
           {% set s2e = [ S, E ] | min %}
           {% set S1 = S - s2e %}
@@ -736,7 +658,7 @@ template:
           {% set GP =      states('sensor.solis_inverter_grid_power')    | float %}
           {% set H  = [ 0, states('sensor.solis_inverter_house_load')    | float ] | max %}
           {% set TR = [ 0, states('sensor.tesla_home_charging_power')    | float ] | max %}
-          {% set AR = [ 0, states('sensor.aircon_power')              | float(0) ] | max %}
+          {% set A  = [ 0, states('sensor.solis_inverter_backup_load') | float ] | max %}
           {% set FR = [ 0, states('sensor.fridge_power')              | float(0) ] | max %}
           {% set B  = [ 0, -BP ] | max %}
           {% set C  = [ 0,  BP ] | max %}
@@ -744,8 +666,7 @@ template:
           {% set E  = [ 0, -GP ] | max %}
           {% set T  = [ TR, H ] | min %}
           {% set F  = [ FR, H - T ] | min %}
-          {% set A  = [ AR, H - T - F ] | min %}
-          {% set Hr = [ 0, H - T - F - A ] | max %}
+          {% set Hr = H - T - F %}
           {% set L  = [ 0, (S + B + G) - (Hr + T + A + F + C + E) ] | max %}
           {% set s2e = [ S, E ] | min %}
           {% set S1 = S - s2e %}

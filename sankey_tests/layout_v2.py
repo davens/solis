@@ -293,9 +293,8 @@ NODES = [
     {"id": GRID_IN, "name": "Grid import", "section": 0, "color": GRID_IN_COLOR},
 
     # House / Tesla / Air con / Fridge / Inverter are each the sum of their own inbound
-    # meters. House keeps its name but is now the rest of the house: both the
-    # car, air con and fridge are carved out of it, exactly as the owner asked on
-    # 2026-09-11 ("house stays named house, but is essentially rest of house").
+    # meters. House keeps its name: Tesla and fridge are carved out of 33147.
+    # EPS is a separate AC output feeding Air con (2026-10-17).
     {
         "id": HOUSE,
         "name": "House",
