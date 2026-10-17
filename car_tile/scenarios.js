@@ -30,7 +30,7 @@ const list = [
       common(s, h, { where: 'not_home', lat: 52.2610, lon: 0.1930, heading: 45, garage: 'on', garageAgo: 40 });
       h.set(s, 'sensor.tesla_state', 'online'); h.set(s, 'binary_sensor.tesla_plugged_in', 'off');
       h.set(s, 'sensor.tesla_charging_state', 'Disconnected'); h.set(s, 'sensor.tesla_battery', 64); h.set(s, 'sensor.tesla_range', 271);
-      h.set(s, 'binary_sensor.tesla_locked', 'on');
+      h.set(s, 'binary_sensor.tesla_unlocked', 'off');
     } },
   { id: 'home_charging_alerts', title: 'Home, charging · garage open 12 min · sentry + boot open (busiest case)',
     apply(s, h) {

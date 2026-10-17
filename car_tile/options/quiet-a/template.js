@@ -1,16 +1,16 @@
 const S = id => (states[id] || {}).state;
 const OD = Object.keys(states).filter(k => k.includes('.octopus_energy_') && k.includes('_intelligent_')).map(k => k.slice(k.indexOf('.') + 1, k.indexOf('_intelligent_'))).sort()[0];
 const g = sfx => { for (const d of ['sensor','number','time','select','binary_sensor']) { const s = states[d + '.' + OD + '_intelligent_' + sfx]; if (s && s.state !== 'unavailable' && s.state !== 'unknown') { return s; } } return null; };
-const st = S('sensor.tesla_state') || 'unknown';
+const st = (S('sensor.tesla_state') || 'unknown').toLowerCase();
 const cs = S('sensor.tesla_charging_state');
 const kw = Number(S('sensor.tesla_charger_power'));
 const chg = cs === 'Charging' || (isFinite(kw) && kw > 0);
 const plugged = S('binary_sensor.tesla_plugged_in') === 'on';
-const lockedS = S('binary_sensor.tesla_locked');
+const lockedS = ({ on: 'off', off: 'on' })[S('binary_sensor.tesla_unlocked')];
 const socN = Number(S('sensor.tesla_battery'));
 const ok = isFinite(socN);
 const resting = ['offline','asleep','suspended'].includes(st);
-const stale = S('binary_sensor.teslamate_healthy') === 'off' || ['unknown','unavailable'].includes(st) || !ok;
+const stale = S('binary_sensor.teslamate_problem') === 'on' || ['unknown','unavailable'].includes(st) || !ok;
 const soc = ok ? Math.max(0, Math.min(100, socN)) : 0;
 const km = Number(S('sensor.tesla_range'));
 const mi = isFinite(km) ? Math.round(km * 0.621371) : null;
@@ -104,7 +104,7 @@ const tp = [['fl', 'FL'], ['fr', 'FR'], ['rl', 'RL'], ['rr', 'RR']].filter(w => 
 if (tp.length) { chips.push(chipH(gTyre(AMB), tp.join(' · ') + ' bar', AMB)); }
 if (S('binary_sensor.tesla_climate_on') === 'on' || S('binary_sensor.tesla_preconditioning') === 'on') { chips.push(chipH(gWind(CYN), S('binary_sensor.tesla_preconditioning') === 'on' ? 'Preconditioning' : 'Climate on', CYN)); }
 if (S('binary_sensor.tesla_sentry') === 'on') { chips.push(chipH(gEye(BLU), 'Sentry', BLU)); }
-if (S('binary_sensor.tesla_update_available') === 'on') { const ip = Number(S('sensor.tesla_install_perc')); chips.push(chipH(gDown(BLU), isFinite(ip) && ip > 0 && ip < 100 ? 'Installing ' + Math.round(ip) + '%' : 'Update ready', BLU)); }
+if (S('update.tesla_update') === 'on') { const ip = Number(S('sensor.tesla_install_perc')); chips.push(chipH(gDown(BLU), isFinite(ip) && ip > 0 && ip < 100 ? 'Installing ' + Math.round(ip) + '%' : 'Update ready', BLU)); }
 const alerts = chips.length ? `<div style='display:flex;flex-wrap:wrap;gap:6px;margin-top:-1px;opacity:${stale ? 0.45 : 1};'>${chips.join('')}</div>` : '';
 const notch = isFinite(lim) && lim > 0 && lim < 100 ? `<div style='position:absolute;top:-2px;height:8px;width:2px;border-radius:1px;left:calc(${Math.round(lim)}% - 1px);background:rgba(255,255,255,0.55);'></div>` : '';
 return `<div style='display:flex;flex-direction:column;gap:9px;text-align:left;'><div style='display:flex;justify-content:space-between;align-items:center;'><span style='display:flex;align-items:center;gap:6px;'>${carGlyph}${boltG}<span style='font-size:10.5px;letter-spacing:0.10em;text-transform:uppercase;color:rgba(255,255,255,0.40);'>Tesla</span></span><span style='display:flex;align-items:center;font-size:11px;color:${lockCol};'>${garageHdr}${lockGlyph}${lockTxt}</span></div><div style='display:flex;align-items:center;justify-content:space-between;gap:10px;'><div style='flex:none;'><div style='font-size:36px;font-weight:600;line-height:1;color:${heroCol};font-variant-numeric:tabular-nums;'>${ok ? Math.round(socN) : '—'}<span style='font-size:17px;font-weight:400;color:rgba(255,255,255,0.45);'>%</span></div><div style='font-size:12px;color:${dim};margin-top:5px;'>${mi !== null ? mi + ' mi' : ''}</div></div>${info}</div><div style='position:relative;height:4px;border-radius:2px;background:rgba(255,255,255,0.14);'><div style='position:absolute;left:0;top:0;bottom:0;width:${soc}%;border-radius:2px;background:${barCol};opacity:${stale ? 0.5 : 1};'></div>${notch}</div><div style='min-height:15px;display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;column-gap:12px;row-gap:3px;'><div style='flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:1.3;color:${l1c};'>${l1}</div>${l2 ? `<div style='flex:none;white-space:nowrap;font-size:11.5px;line-height:1.3;color:rgba(255,255,255,0.40);'>${l2}</div>` : ''}</div></div>${alerts}</div>`;

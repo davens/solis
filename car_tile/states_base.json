@@ -450,22 +450,22 @@
   "last_updated": "2026-09-23T06:55:58.179258+00:00"
  },
  {
-  "entity_id": "binary_sensor.tesla_locked",
-  "state": "on",
+  "entity_id": "binary_sensor.tesla_unlocked",
+  "state": "off",
   "attributes": {
    "device_class": "lock",
-   "friendly_name": "Tesla Locked"
+   "friendly_name": "Tesla Unlocked"
   },
   "last_changed": "2026-09-23T15:42:51.879014+00:00",
   "last_reported": "2026-09-23T15:42:51.879014+00:00",
   "last_updated": "2026-09-23T15:42:51.879014+00:00"
  },
  {
-  "entity_id": "binary_sensor.tesla_update_available",
+  "entity_id": "update.tesla_update",
   "state": "off",
   "attributes": {
-   "device_class": "update",
-   "friendly_name": "Tesla Update available"
+   "device_class": "firmware",
+   "friendly_name": "Tesla Update"
   },
   "last_changed": "2026-09-21T01:14:22.776625+00:00",
   "last_reported": "2026-09-21T01:14:22.776625+00:00",
@@ -494,11 +494,11 @@
   "last_updated": "2026-09-23T15:43:52.746645+00:00"
  },
  {
-  "entity_id": "binary_sensor.teslamate_healthy",
-  "state": "on",
+  "entity_id": "binary_sensor.teslamate_problem",
+  "state": "off",
   "attributes": {
-   "device_class": "connectivity",
-   "friendly_name": "Tesla TeslaMate healthy"
+   "device_class": "problem",
+   "friendly_name": "Tesla TeslaMate problem"
   },
   "last_changed": "2026-09-23T14:54:18.762874+00:00",
   "last_reported": "2026-09-23T14:54:18.762874+00:00",
@@ -586,7 +586,7 @@
   "entity_id": "sensor.tesla_inside_temp",
   "state": "27.8",
   "attributes": {
-   "unit_of_measurement": "\u00b0C",
+   "unit_of_measurement": "°C",
    "device_class": "temperature",
    "friendly_name": "Tesla Inside temp"
   },
@@ -598,7 +598,7 @@
   "entity_id": "sensor.tesla_outside_temp",
   "state": "26.0",
   "attributes": {
-   "unit_of_measurement": "\u00b0C",
+   "unit_of_measurement": "°C",
    "device_class": "temperature",
    "friendly_name": "Tesla Outside temp"
   },

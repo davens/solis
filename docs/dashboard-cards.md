@@ -86,7 +86,7 @@ a different artefact from the Car tile in `dash.py`.
 
 **`sensor.tesla_state` = `offline` is a sleeping car, not a fault.** Measured over the seven days to
 2026-08-29: offline **73.4%**, online 14.9%, suspended 5.2%, driving 3.7%, charging 2.9% -- while
-`binary_sensor.teslamate_healthy` was `on` for 98.9% of the same window. Tesla lets the car stop
+TeslaMate reported itself healthy for 98.9% of the same window. Tesla lets the car stop
 answering the API to avoid vampire drain, and TeslaMate reports that as offline. The tile used to list
 `offline` alongside `unknown` and `unavailable`, so for roughly three-quarters of every week it showed
 a red "No link - data stale", a 55%-white hero number, a half-opacity bar and 45%-opacity info rows,
@@ -99,8 +99,19 @@ every time. Do not add one.
 
 So `offline`/`asleep`/`suspended` are one `resting` state, shown at full brightness as "Asleep" (or
 "Plugged in - Asleep"), and `stale` now means only that the link to TeslaMate is genuinely broken:
-`teslamate_healthy` off, `sensor.tesla_state` unknown/unavailable, or no SOC to display. That is the
+`binary_sensor.teslamate_problem` on, `sensor.tesla_state` unknown/unavailable, or no SOC to display. That is the
 only honest signal available.
+
+**The Tesla entities come from TeslaMate's own HA discovery** (add-on env var
+`MQTT_HOME_ASSISTANT_DISCOVERY=true`, one `homeassistant/device/teslamate_1/config` payload). Verified
+2026-10-16: TeslaMate 4.3 deletes the older per-entity `homeassistant/<domain>/teslamate_1/*/config`
+topics on startup, which removed every Tesla entity from every screen until native discovery was switched
+on. Its health entity is a *problem* sensor -- **`on` means the link is broken** -- so it is named
+`binary_sensor.teslamate_problem`; the old `teslamate_healthy` had the opposite meaning. The lock is HA's
+`lock` class -- **`on` means unlocked** -- so it is `binary_sensor.tesla_unlocked`, not `tesla_locked`.
+`sensor.tesla_state` is title-cased (`Offline`, `Driving`), so consumers lower-case it before comparing.
+Update-available is `update.tesla_update`, and `sensor.tesla_range` is the native rated range. Do not
+republish old-style topics.
 
 
 **The alert chips were folded into the tile on 2026-09-13.** The Overview Car tile used to be followed
