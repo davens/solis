@@ -19,7 +19,12 @@ Input registers use FC 0x04 for telemetry; 43xxx holding registers use FC 0x03/0
 | 33133 / 33134 | Battery voltage/current, x0.1 |
 | **33135** | Battery direction: 0 charging, 1 discharging; **not current** |
 | 33139 / 33140 | Battery SOC/SOH, % |
-| 33147 | House load, W |
+| 33141 | BMS battery voltage, x0.01 V; read 53.5 V against 33133's 54.1 V while charging (2026-10-17) |
+| 33142 | BMS battery current, x0.1 A; read **identical** to 33134 (23.4 A), so probably the same measurement relayed, not an independent shunt -- unverified |
+| 33143 / 33144 | BMS charge / discharge current limit, x0.1 A; both 100.0 A (2026-10-17) |
+| 33145 / 33146 | BMS fault bitfields; both 0 (2026-10-17) |
+| 33147 | House load, W; **excludes the EPS/backup port** |
+| 33148 | EPS/backup port load, W. Verified 2026-10-17: the air con (owner-stated) plus a hand-vacuum charger sit on it, and adding it closed most of a persistent ~870 W night-time gap between grid, battery and 33147 |
 | **33149 + 33150** | Battery power, W, big-endian u32 unsigned magnitude; sign from 33135 |
 | 33161-33164 | Battery charge energy: u32 total, today, yesterday; x0.1 kWh |
 | 33165-33168 | Battery discharge energy, same layout |

@@ -14,7 +14,16 @@ REG_BATTERY_CURRENT = 33134   # x0.1 A - NOT 33135, which is the direction flag
 REG_BATTERY_DIRECTION = 33135  # 0 = charging, 1 = discharging
 REG_BATTERY_SOC = 33139
 REG_BATTERY_SOH = 33140
+# The battery's own BMS, relayed over CAN. Meanings from the Solis RHI map; verify
+# against 33133/33134 before relying on them (docs/registers.md).
+REG_BMS_VOLTAGE = 33141       # x0.01 V
+REG_BMS_CURRENT = 33142       # x0.1 A
+REG_BMS_CHARGE_LIMIT = 33143  # x0.1 A, what the BMS will accept
+REG_BMS_DISCHARGE_LIMIT = 33144  # x0.1 A
+REG_BMS_FAULT_1 = 33145       # bitfield, 0 = no fault
+REG_BMS_FAULT_2 = 33146       # bitfield, 0 = no fault
 REG_HOUSE_LOAD = 33147
+REG_BACKUP_LOAD = 33148       # W on the EPS/backup port; NOT included in 33147
 REG_BATTERY_POWER = 33149     # u32 across 33149/33150, watts, unsigned
 
 PV_BASE = 33049
@@ -130,7 +139,14 @@ class SolisClient:
             "battery_charging": charging and battery_power >= 10,
             "battery_soc": tele(REG_BATTERY_SOC),
             "battery_soh": tele(REG_BATTERY_SOH),
+            "bms_voltage": round(tele(REG_BMS_VOLTAGE) * 0.01, 2),
+            "bms_current": round(tele(REG_BMS_CURRENT) * 0.1, 1),
+            "bms_charge_limit": round(tele(REG_BMS_CHARGE_LIMIT) * 0.1, 1),
+            "bms_discharge_limit": round(tele(REG_BMS_DISCHARGE_LIMIT) * 0.1, 1),
+            "bms_fault_1": tele(REG_BMS_FAULT_1),
+            "bms_fault_2": tele(REG_BMS_FAULT_2),
             "house_load": tele(REG_HOUSE_LOAD),
+            "backup_load": tele(REG_BACKUP_LOAD),
             "pv_power": u32(REG_PV_POWER, pv, PV_BASE),
             "pv1_power": pv1,
             "pv2_power": pv2,

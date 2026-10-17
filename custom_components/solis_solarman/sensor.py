@@ -65,12 +65,43 @@ SENSORS: tuple[SolisSensorDescription, ...] = (
         device_class=SensorDeviceClass.CURRENT,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC),
+    SolisSensorDescription(
+        key="bms_voltage", name="BMS voltage",
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC),
+    SolisSensorDescription(
+        key="bms_current", name="BMS current",
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+        device_class=SensorDeviceClass.CURRENT,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC),
+    SolisSensorDescription(
+        key="bms_charge_limit", name="BMS charge current limit",
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+        device_class=SensorDeviceClass.CURRENT,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC),
+    SolisSensorDescription(
+        key="bms_discharge_limit", name="BMS discharge current limit",
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+        device_class=SensorDeviceClass.CURRENT,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC),
+    SolisSensorDescription(
+        key="bms_fault_1", name="BMS fault flags 1",
+        entity_category=EntityCategory.DIAGNOSTIC),
+    SolisSensorDescription(
+        key="bms_fault_2", name="BMS fault flags 2",
+        entity_category=EntityCategory.DIAGNOSTIC),
     _power("pv_power", "Solar power"),
     _power("pv1_power", "Solar power SW string",
            entity_category=EntityCategory.DIAGNOSTIC),
     _power("pv2_power", "Solar power SE string",
            entity_category=EntityCategory.DIAGNOSTIC),
     _power("house_load", "House load"),
+    _power("backup_load", "Backup load"),
     # Signed: positive importing, negative exporting.
     _power("grid_power", "Grid power"),
     SolisSensorDescription(
